@@ -1,0 +1,341 @@
+"""
+processor.py
+------------
+All data processing logic — no GUI code here.
+
+Three functions, called in order by run_processing():
+  1. merge_manifest()      — joins All Info + Manifest Excel files
+  2. apply_brand_routing() — decides CN vs HKP-F for each package
+  3. run_processing()      — the main pipeline: load → merge → route → save
+"""
+
+import os
+import re
+import pandas as pd
+
+from sheets import fetch_sheet
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step A: Merge the two Excel files
+# ─────────────────────────────────────────────────────────────────────────────
+
+def merge_manifest(ai: pd.DataFrame, mnf: pd.DataFrame, log_fn=None) -> pd.DataFrame:
+    """
+    Join All Info (ai) with Manifest (mnf).
+
+    Why this is needed:
+      - All Info has one row per package (shipping_traceno), with ordersn_list
+        that may contain multiple order numbers separated by commas.
+      - Manifest has one row per order (ordersn), with item details
+        (item_name, sub_category, level3_category).
+      - We need item details in order to run the brand check.
+
+    Join key: All Info.ordersn_list  ←→  Manifest.ordersn
+    """
+    def log(msg, tag=""):
+        if log_fn:
+            log_fn(msg, tag)
+
+    # Guard: make sure both sides have the join columns
+    if "ordersn" not in mnf.columns or "ordersn_list" not in ai.columns:
+        log("    ordersn / ordersn_list column missing — skipping merge", "warn")
+        return ai.copy()
+
+    # Keep only the columns we actually need from Manifest
+    mnf_cols = [c for c in ["ordersn", "item_name", "sub_category", "level3_category"]
+                if c in mnf.columns]
+    mnf_sub = mnf[mnf_cols].dropna(subset=["ordersn"]).copy()
+    mnf_sub["ordersn"] = mnf_sub["ordersn"].str.strip()
+
+    # Explode ordersn_list: "A,B,C" becomes three separate rows
+    # so we can match each order number against Manifest
+    ai_exploded = ai.copy()
+    ai_exploded["_ordersn_key"] = ai_exploded["ordersn_list"].str.split(",")
+    ai_exploded = ai_exploded.explode("_ordersn_key")
+    ai_exploded["_ordersn_key"] = ai_exploded["_ordersn_key"].str.strip()
+
+    # Drop any manifest columns that already exist in ai (to avoid duplicates)
+    detail_cols = [c for c in ["item_name", "sub_category", "level3_category"]
+                   if c in mnf_sub.columns]
+    ai_exploded = ai_exploded.drop(columns=[c for c in detail_cols if c in ai_exploded.columns],
+                                   errors="ignore")
+
+    # Join: each exploded row gets its item details from Manifest
+    result = ai_exploded.merge(
+        mnf_sub.rename(columns={"ordersn": "_ordersn_key"}),
+        on="_ordersn_key",
+        how="left"
+    ).drop(columns=["_ordersn_key"])
+
+    # Report how many rows ended up with no item_name (unmatched orders)
+    no_item = result.get("item_name", pd.Series(dtype=str)).isna().sum()
+    if no_item:
+        log(f"    {no_item:,} rows have no item_name after merge (ordersn not in Manifest)", "warn")
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step B: CN Brand Routing
+# ─────────────────────────────────────────────────────────────────────────────
+
+def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataFrame:
+    """
+    For every CN-origin row, decide: keep existing sorting_instruction or set HKP-F.
+
+    Decision tree (per row):
+      - Non-CN package         → pass through unchanged
+      - CN, no brand match     → keep as-is
+      - CN, brand match BUT item_name contains an exclude keyword → keep as-is
+      - CN, brand match BUT category contains an exclude keyword  → keep as-is
+      - CN, brand match + shopid is authorized                    → keep as-is
+      - CN, brand match + shopid NOT authorized                   → HKP-F
+
+    Parameters
+    ----------
+    df    : merged DataFrame (output of merge_manifest)
+    bj_df : Brand Judge Google Sheet (or None if not provided)
+    ba_df : Brand Authorization Google Sheet (or None if not provided)
+    """
+    def log(msg, tag=""):
+        if log_fn:
+            log_fn(msg, tag)
+
+    # ── Parse Brand Judge sheet ──────────────────────────────────────────────
+    brand_terms = []   # list of brand keywords to search in item_name
+    item_excl   = []   # item_name keywords that cancel a brand hit
+    cat_excl    = []   # category keywords that cancel a brand hit
+
+    if bj_df is not None:
+        bj = bj_df.copy()
+        bj.columns = bj.columns.str.strip()
+
+        def _find_col(cols, keyword):
+            """Find a column whose name contains the given keyword (case-insensitive)."""
+            return next((c for c in cols if keyword.lower() in c.lower()), None)
+
+        c_brand = _find_col(bj.columns, "item name brand")
+        c_iexcl = _find_col(bj.columns, "item name exclude")
+        c_cexcl = _find_col(bj.columns, "sub_cagtegory")  # note: intentional typo matches real column
+
+        if c_brand:
+            brand_terms = bj[c_brand].dropna().str.strip().tolist()
+            preview = brand_terms[:5]
+            suffix = "..." if len(brand_terms) > 5 else ""
+            log(f"    Brands ({len(brand_terms)}): {preview}{suffix}", "info")
+
+        if c_iexcl:
+            item_excl = bj[c_iexcl].dropna().str.strip().tolist()
+            preview = item_excl[:4]
+            suffix = "..." if len(item_excl) > 4 else ""
+            log(f"    Item name excludes ({len(item_excl)}): {preview}{suffix}")
+
+        if c_cexcl:
+            for cell in bj[c_cexcl].dropna().str.strip():
+                cat_excl.extend([t.strip() for t in re.split(r"[,;|、\n]+", cell) if t.strip()])
+            preview = cat_excl[:4]
+            suffix = "..." if len(cat_excl) > 4 else ""
+            log(f"    Category excludes ({len(cat_excl)}): {preview}{suffix}")
+
+    # ── Parse Brand Authorization sheet ─────────────────────────────────────
+    auth_ids: set = set()
+
+    if ba_df is not None:
+        ba = ba_df.copy()
+        ba.columns = ba.columns.str.strip()
+        sc = next((c for c in ba.columns if "child_shopid" in c.lower()), None)
+        if sc:
+            def _to_int_str(x):
+                """Convert shopid to plain integer string (removes .0 from floats)."""
+                try:
+                    return str(int(float(str(x).strip())))
+                except Exception:
+                    return str(x).strip()
+            auth_ids = set(ba[sc].dropna().apply(_to_int_str))
+            log(f"    Authorized shop IDs: {len(auth_ids):,}", "info")
+        else:
+            log("    Brand Auth: column 'child_shopid' not found", "warn")
+
+    # ── Split CN vs non-CN ───────────────────────────────────────────────────
+    is_cn = df.get("country", pd.Series(dtype=str)).str.strip().str.upper() == "CN"
+    log(f"    Non-CN rows (pass-through): {(~is_cn).sum():,}")
+    log(f"    CN rows (brand check)     : {is_cn.sum():,}")
+
+    if not is_cn.any():
+        return df  # nothing CN, nothing to do
+
+    cn = df[is_cn].copy()
+
+    # Text columns used for matching
+    si = cn.get("item_name",       pd.Series("", index=cn.index)).fillna("").astype(str)
+    ss = cn.get("sub_category",    pd.Series("", index=cn.index)).fillna("").astype(str)
+    sl = cn.get("level3_category", pd.Series("", index=cn.index)).fillna("").astype(str)
+
+    def _norm_shopid(x):
+        try:
+            return str(int(float(str(x).strip())))
+        except Exception:
+            return str(x).strip()
+
+    sid_norm = cn.get("shopid", pd.Series("", index=cn.index)).apply(_norm_shopid)
+
+    # Build regex patterns once (faster than per-row string searching)
+    ie_pat = ("|".join(re.escape(t) for t in item_excl)) if item_excl else None
+    ce_pat = ("|".join(re.escape(t) for t in cat_excl))  if cat_excl  else None
+
+    # hkp_mask: True for rows that will become HKP-F
+    hkp_mask = pd.Series(False, index=cn.index)
+
+    # Check each brand independently (a row is HKP-F if ANY brand triggers it)
+    for brand in brand_terms:
+        if not brand:
+            continue
+
+        # Does item_name contain this brand?
+        hit = si.str.contains(re.escape(brand), case=False, na=False)
+        if not hit.any():
+            continue
+
+        # Is this hit cancelled by an exclusion rule?
+        excl = pd.Series(False, index=cn.index)
+        if ie_pat:
+            excl |= hit & si.str.contains(ie_pat, case=False, na=False)
+        if ce_pat:
+            excl |= hit & (ss.str.contains(ce_pat, case=False, na=False) |
+                           sl.str.contains(ce_pat, case=False, na=False))
+
+        # Hit + not excluded + not an authorized shop → HKP-F
+        brand_hkp = hit & (~excl) & (~sid_norm.isin(auth_ids))
+        hkp_mask |= brand_hkp
+
+    cn.loc[hkp_mask, "sorting_instruction"] = "HKP-F"
+
+    log(f"    CN rows kept as-is : {(~hkp_mask).sum():,}", "ok")
+    log(f"    CN rows → HKP-F   : {int(hkp_mask.sum()):,}", "ok")
+
+    # Recombine non-CN and CN rows
+    return pd.concat([df[~is_cn], cn], ignore_index=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_processing(params: dict, log_fn=None) -> dict:
+    """
+    Full processing pipeline. Called by the UI when the user clicks Start.
+
+    Parameters
+    ----------
+    params : dict with keys:
+        batch_no        — text entered in Step 1
+        all_info_path   — path to All Info Excel file
+        manifest_path   — path to Manifest Excel file
+        brand_judge_url — Google Sheets URL (Brand Judge)
+        brand_auth_url  — Google Sheets URL (Brand Authorization)
+        out_dir         — folder where the output file will be saved
+
+    Returns
+    -------
+    dict with keys: out_path, out_fname, rows, hkp_f, out_dir
+    """
+    def log(msg, tag=""):
+        if log_fn:
+            log_fn(msg, tag)
+
+    batch_no  = params["batch_no"]
+    out_dir   = params["out_dir"]
+    out_fname = f"Sorting Instruction of {batch_no}.xlsx"
+    out_path  = os.path.join(out_dir, out_fname)
+
+    log("=" * 65, "dim")
+    log("  SLS Sorting Instruction Generator  v2.0", "info")
+    log("=" * 65, "dim")
+    log(f"Batch No : {batch_no}", "info")
+    log(f"Output   : {out_fname}", "info")
+
+    # 1/5 — Load All Info
+    log("\n[1/5]  Loading All Info ...")
+    all_info = pd.read_excel(params["all_info_path"], sheet_name=0, engine="openpyxl", dtype=str)
+    all_info.columns = all_info.columns.str.strip()
+    cn_count = (all_info.get("country", pd.Series(dtype=str))
+                .str.strip().str.upper() == "CN").sum()
+    log(f"    Rows: {len(all_info):,}  |  CN: {cn_count:,}  |  Non-CN: {len(all_info)-cn_count:,}", "ok")
+
+    # 2/5 — Load Manifest
+    log("\n[2/5]  Loading Manifest ...")
+    manifest = pd.read_excel(params["manifest_path"], sheet_name=0, engine="openpyxl", dtype=str)
+    manifest.columns = manifest.columns.str.strip()
+    log(f"    Rows: {len(manifest):,}", "ok")
+    missing_mnf = [c for c in ["ordersn", "item_name", "sub_category", "level3_category"]
+                   if c not in manifest.columns]
+    if missing_mnf:
+        log(f"    Missing columns in Manifest: {missing_mnf}", "warn")
+
+    # 3/5 — Fetch Google Sheets
+    log("\n[3/5]  Fetching Google Sheets ...")
+    brand_judge_df = fetch_sheet(params["brand_judge_url"], "Brand Judge",        log_fn)
+    brand_auth_df  = fetch_sheet(params["brand_auth_url"],  "Brand Authorization", log_fn)
+
+    # 4/5 — Merge
+    log("\n[4/5]  Merging All Info + Manifest ...")
+    merged = merge_manifest(all_info, manifest, log_fn)
+    log(f"    After merge: {len(merged):,} rows", "ok")
+
+    # 5/5 — Brand routing
+    log("\n[5/5]  Applying CN brand routing ...")
+    merged = apply_brand_routing(merged, brand_judge_df, brand_auth_df, log_fn)
+
+    # HKP-F propagation:
+    # If ANY row on a shipping_traceno is HKP-F, ALL rows of that traceno become HKP-F.
+    # (A single counterfeit item makes the whole parcel counterfeit.)
+    if "sorting_instruction" in merged.columns and "shipping_traceno" in merged.columns:
+        hkp_tracenos = set(
+            merged.loc[merged["sorting_instruction"] == "HKP-F", "shipping_traceno"]
+            .dropna().unique()
+        )
+        if hkp_tracenos:
+            propagated = merged["shipping_traceno"].isin(hkp_tracenos)
+            extra = int(propagated.sum()) - int((merged["sorting_instruction"] == "HKP-F").sum())
+            if extra > 0:
+                merged.loc[propagated, "sorting_instruction"] = "HKP-F"
+                log(f"    HKP-F propagated to {extra:,} additional rows on same traceno", "warn")
+
+    # Dedup: keep one row per shipping_traceno
+    before = len(merged)
+    merged = merged.drop_duplicates(subset=["shipping_traceno"], keep="first")
+    log(f"\nDedup on shipping_traceno: {before:,} → {len(merged):,} rows", "ok")
+
+    # Build the final output with the required columns in the right order
+    OUTPUT_COLS = [
+        "shipping_traceno", "ordersn_list", "consolidated_type",
+        "orderid", "lm_tracking_number", "shopid", "cogs_sls",
+        "if_delivered", "actual_weight", "gp_account_name",
+        "child_account_name", "sorting_instruction",
+    ]
+    present     = [c for c in OUTPUT_COLS if c in merged.columns]
+    missing_out = [c for c in OUTPUT_COLS if c not in merged.columns]
+    if missing_out:
+        log(f"    Columns not found in All Info: {missing_out}", "warn")
+
+    result = merged[present].copy()
+    result["return_lm_tracking_number"] = ""   # always blank per spec
+    result["special remark"]            = ""   # always blank per spec
+    result.insert(0, "Batch no", batch_no)     # Column A
+
+    result.to_excel(out_path, index=False, sheet_name="Sheet1")
+
+    hkp_f = int((result.get("sorting_instruction", pd.Series(dtype=str)) == "HKP-F").sum())
+    log("\n" + "=" * 65, "dim")
+    log(f"DONE  |  Rows: {len(result):,}  |  HKP-F: {hkp_f:,}", "ok")
+    log(f"Saved → {out_fname}", "ok")
+    log("=" * 65, "dim")
+
+    return {
+        "out_path":  out_path,
+        "out_fname": out_fname,
+        "rows":      len(result),
+        "hkp_f":     hkp_f,
+        "out_dir":   out_dir,
+    }
