@@ -10,51 +10,67 @@ How it works:
   4. Read it with pandas
 """
 
+import os
 import re
 import pandas as pd
 
 
-def fetch_sheet(url: str, name: str, log_fn=None) -> pd.DataFrame:
+def fetch_sheet(url_or_path: str, name: str, log_fn=None) -> pd.DataFrame:
     """
-    Download a public Google Sheet as a DataFrame.
+    Load a sheet as a DataFrame — from a Google Sheets URL or a local file.
 
     Parameters
     ----------
-    url     : the full Google Sheets URL the user pasted
-    name    : human-readable label used in log messages (e.g. "Brand Judge")
-    log_fn  : optional function(msg, tag) for logging to the UI
+    url_or_path : Google Sheets URL  — fetched from the web
+                  OR a local file path (.xlsx / .xls / .csv) — read directly
+    name        : human-readable label for log messages (e.g. "Brand Judge")
+    log_fn      : optional function(msg, tag) for logging to the UI
 
     Returns
     -------
-    pd.DataFrame on success, or None if URL is empty / download fails
+    pd.DataFrame on success, or None if input is empty / loading fails
     """
     def log(msg, tag=""):
         if log_fn:
             log_fn(msg, tag)
 
-    url = url.strip()
-    if not url:
-        log(f"    {name}: no URL provided — skipped", "dim")
+    value = url_or_path.strip()
+    if not value:
+        log(f"    {name}: not provided — skipped", "dim")
         return None
 
+    # ── Local file fallback ──────────────────────────────────────────────────
+    if os.path.isfile(value):
+        try:
+            log(f"    {name}: reading local file ...")
+            ext = os.path.splitext(value)[1].lower()
+            if ext in (".xlsx", ".xls"):
+                df = pd.read_excel(value, dtype=str)
+            else:
+                df = pd.read_csv(value, dtype=str)
+            df.columns = df.columns.str.strip()
+            log(f"    {name}: {len(df):,} rows  |  columns: {df.columns.tolist()}", "ok")
+            return df
+        except Exception as e:
+            log(f"    {name} local file failed: {e}", "err")
+            return None
+
+    # ── Google Sheets URL ────────────────────────────────────────────────────
     try:
-        # Extract the spreadsheet ID (always between /d/ and the next /)
-        m_id = re.search(r"/d/([a-zA-Z0-9_-]+)", url)
+        m_id = re.search(r"/d/([a-zA-Z0-9_-]+)", value)
         if not m_id:
-            raise ValueError("Cannot find spreadsheet ID in URL. Make sure you copied the full URL.")
+            raise ValueError("Not a valid Google Sheets URL and not a local file path.")
         sid = m_id.group(1)
 
-        # Extract the sheet tab ID (gid=...) — defaults to "0" (first tab)
-        m_gid = re.search(r"[#&?]gid=([0-9]+)", url)
+        m_gid = re.search(r"[#&?]gid=([0-9]+)", value)
         gid = m_gid.group(1) if m_gid else "0"
 
-        # Build the CSV export URL (this works for any public Google Sheet)
         csv_url = (
             f"https://docs.google.com/spreadsheets/d/{sid}"
             f"/export?format=csv&gid={gid}"
         )
 
-        log(f"    Fetching {name} ...")
+        log(f"    Fetching {name} from Google Sheets ...")
         df = pd.read_csv(csv_url, dtype=str)
         df.columns = df.columns.str.strip()
         log(f"    {name}: {len(df):,} rows  |  columns: {df.columns.tolist()}", "ok")

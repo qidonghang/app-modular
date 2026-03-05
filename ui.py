@@ -20,6 +20,7 @@ import tkinter.font as tkFont
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from processor import run_processing
+import config
 
 # Windows DPI fix — makes text sharp on high-resolution screens
 try:
@@ -44,7 +45,7 @@ class SLSSortingApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("SLS Sorting Instruction Generator  v2.0")
-        self.root.geometry("960x900")
+        self.root.geometry("1100x1020")
         self.root.resizable(True, True)
 
         # Scale UI for high-DPI displays
@@ -55,27 +56,28 @@ class SLSSortingApp:
 
         # Define fonts (fall back to system defaults if Arial/Courier are missing)
         try:
-            self.fnt_title = tkFont.Font(family="Arial",       size=14, weight="bold")
-            self.fnt_label = tkFont.Font(family="Arial",       size=10)
-            self.fnt_mono  = tkFont.Font(family="Courier New", size=9)
-            self.fnt_hint  = tkFont.Font(family="Arial",       size=8,  slant="italic")
+            self.fnt_title = tkFont.Font(family="Arial",       size=22, weight="bold")
+            self.fnt_label = tkFont.Font(family="Arial",       size=13)
+            self.fnt_mono  = tkFont.Font(family="Courier New", size=12)
+            self.fnt_hint  = tkFont.Font(family="Arial",       size=11, slant="italic")
         except Exception:
-            self.fnt_title = tkFont.Font(size=14, weight="bold")
-            self.fnt_label = tkFont.Font(size=10)
-            self.fnt_mono  = tkFont.Font(size=9)
-            self.fnt_hint  = tkFont.Font(size=8)
+            self.fnt_title = tkFont.Font(size=22, weight="bold")
+            self.fnt_label = tkFont.Font(size=13)
+            self.fnt_mono  = tkFont.Font(size=12)
+            self.fnt_hint  = tkFont.Font(size=11)
 
         # StringVars bind each text field to a Python variable
+        # Brand Judge and Brand Auth are pre-filled from config.py
         self.sv_batch_no        = tk.StringVar()
         self.sv_all_info        = tk.StringVar()
         self.sv_manifest        = tk.StringVar()
-        self.sv_brand_judge_url = tk.StringVar()
-        self.sv_brand_auth_url  = tk.StringVar()
+        self.sv_brand_judge_url = tk.StringVar(value=config.BRAND_JUDGE_URL)
+        self.sv_brand_auth_url  = tk.StringVar(value=config.BRAND_AUTH_URL)
         self.sv_output_dir      = tk.StringVar()
 
         self._build_ui()
         self._apply_theme()
-        self._center_window(960, 900)
+        self._center_window(1100, 1020)
 
     # ── Theme / Colors ────────────────────────────────────────────────────────
 
@@ -83,30 +85,36 @@ class SLSSortingApp:
         style = ttk.Style(self.root)
         style.theme_use("clam")
 
-        BG  = "#F0F4F8"  # light blue-grey background
-        FG  = "#2D3748"  # dark text
-        MID = "#4A5568"  # medium grey text
+        # Shopee colour palette
+        BG     = "#FAFAFA"   # near-white background
+        FG     = "#333333"   # dark text
+        MID    = "#666666"   # medium grey text
+        ORANGE = "#EE4D2D"   # Shopee signature orange
+        ORANGE_DARK  = "#D73211"   # hover / pressed
+        ORANGE_LIGHT = "#FFF3F0"   # subtle tint for button hover
+        BORDER = "#F0D0C8"   # soft orange border for sections
 
         self.root.configure(bg=BG)
         style.configure("TFrame",            background=BG)
-        style.configure("TLabelframe",       background=BG, bordercolor="#CBD5E0", relief="solid")
-        style.configure("TLabelframe.Label", background=BG, foreground=FG, font=("Arial", 10, "bold"))
-        style.configure("TLabel",            background=BG, foreground=MID, font=("Arial", 10))
-        style.configure("TEntry",            fieldbackground="#FFFFFF", foreground=FG, padding=4)
-        style.configure("TButton",           background="#EDF2F7", foreground=MID,
-                         font=("Arial", 9), padding=(8, 4), relief="flat")
-        style.map("TButton",                 background=[("active", "#E2E8F0")])
-        style.configure("Accent.TButton",    background="#3182CE", foreground="#FFFFFF",
-                         font=("Arial", 10, "bold"), padding=(14, 6), relief="flat")
-        style.map("Accent.TButton",          background=[("active", "#2B6CB0"), ("disabled", "#A0AEC0")])
-        style.configure("TSeparator",        background="#CBD5E0")
+        style.configure("TLabelframe",       background=BG, bordercolor=BORDER, relief="solid")
+        style.configure("TLabelframe.Label", background=BG, foreground=ORANGE, font=("Arial", 13, "bold"))
+        style.configure("TLabel",            background=BG, foreground=MID,    font=("Arial", 13))
+        style.configure("TEntry",            fieldbackground="#FFFFFF", foreground=FG, padding=6)
+        style.configure("TButton",           background="#F5F5F5", foreground=FG,
+                         font=("Arial", 11), padding=(10, 6), relief="flat")
+        style.map("TButton",                 background=[("active", ORANGE_LIGHT)],
+                                             foreground=[("active", ORANGE)])
+        style.configure("Accent.TButton",    background=ORANGE, foreground="#FFFFFF",
+                         font=("Arial", 13, "bold"), padding=(20, 9), relief="flat")
+        style.map("Accent.TButton",          background=[("active", ORANGE_DARK), ("disabled", "#F0A090")])
+        style.configure("TSeparator",        background=ORANGE)
 
-        # Log box is dark (terminal style)
+        # Log box — keep dark terminal style, orange for info tag
         self.log_box.config(bg="#1A202C", fg="#A0AEC0", insertbackground="#A0AEC0")
         self.log_box.tag_config("ok",   foreground="#68D391")  # green
         self.log_box.tag_config("err",  foreground="#FC8181")  # red
-        self.log_box.tag_config("warn", foreground="#F6AD55")  # orange
-        self.log_box.tag_config("info", foreground="#63B3ED")  # blue
+        self.log_box.tag_config("warn", foreground="#F6AD55")  # amber
+        self.log_box.tag_config("info", foreground="#EE4D2D")  # Shopee orange
         self.log_box.tag_config("dim",  foreground="#718096")  # grey
 
     def _center_window(self, w, h):
@@ -121,7 +129,7 @@ class SLSSortingApp:
         # Outer frame + scrollable canvas (so the window can be resized)
         outer  = ttk.Frame(self.root)
         outer.pack(fill="both", expand=True)
-        canvas = tk.Canvas(outer, highlightthickness=0, bg="#F0F4F8")
+        canvas = tk.Canvas(outer, highlightthickness=0, bg="#FAFAFA")
         vscr   = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         self.body = ttk.Frame(canvas)
         self.body.bind("<Configure>",
@@ -133,13 +141,13 @@ class SLSSortingApp:
         canvas.bind_all("<MouseWheel>",
             lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
-        PAD = {"padx": 14, "pady": 6}
+        PAD = {"padx": 18, "pady": 8}
 
         # Title
         ttk.Label(self.body, text="SLS Sorting Instruction Generator",
-                  font=self.fnt_title).pack(**PAD, anchor="w")
+                  font=self.fnt_title, foreground="#EE4D2D").pack(**PAD, anchor="w")
         ttk.Label(self.body, text="Cross-Border Reverse Logistics  |  v2.0",
-                  font=self.fnt_hint).pack(padx=14, pady=(0, 4), anchor="w")
+                  font=self.fnt_hint, foreground="#666666").pack(padx=18, pady=(0, 4), anchor="w")
         ttk.Separator(self.body, orient="horizontal").pack(fill="x", padx=14, pady=4)
 
         # Step 1 — Batch No.
@@ -160,26 +168,38 @@ class SLSSortingApp:
                        "e.g.  PH Normal MNF Output.xlsx")
         f2.columnconfigure(1, weight=1)
 
-        # Step 3 — Google Sheets
+        # Step 3 — Google Sheets (with local file fallback)
         f3 = ttk.LabelFrame(self.body,
-            text="Step 3 — Google Sheets URLs  (must be public / anyone with link can view)",
+            text="Step 3 — Brand Data  (Google Sheets URL or local Excel file)",
             padding=10)
         f3.pack(fill="x", **PAD)
-        ttk.Label(f3, text="Brand Judge Sheet URL:") \
+
+        ttk.Label(f3, text="Brand Judge:") \
             .grid(row=0, column=0, sticky="w", pady=(0, 2))
-        ttk.Entry(f3, textvariable=self.sv_brand_judge_url, width=78) \
-            .grid(row=1, column=0, sticky="ew", pady=(0, 2))
+        bj_row = ttk.Frame(f3)
+        bj_row.grid(row=1, column=0, sticky="ew", pady=(0, 2))
+        ttk.Entry(bj_row, textvariable=self.sv_brand_judge_url) \
+            .pack(side="left", fill="x", expand=True)
+        ttk.Button(bj_row, text="Browse file...",
+                   command=lambda: self._browse_file(self.sv_brand_judge_url)) \
+            .pack(side="left", padx=(8, 0))
         ttk.Label(f3,
-            text='Required columns: "item name brand"  |  "item name exclude"  |  '
-                 '"sub_cagtegory & level3_category exclue"',
-            font=self.fnt_hint).grid(row=2, column=0, sticky="w", pady=(0, 8))
-        ttk.Label(f3, text="Brand Authorization Sheet URL:") \
+            text='Columns: "item name brand"  |  "item name exclude"  |  "sub_cagtegory & level3_category exclue"',
+            font=self.fnt_hint).grid(row=2, column=0, sticky="w", pady=(0, 10))
+
+        ttk.Label(f3, text="Brand Authorization:") \
             .grid(row=3, column=0, sticky="w", pady=(0, 2))
-        ttk.Entry(f3, textvariable=self.sv_brand_auth_url, width=78) \
-            .grid(row=4, column=0, sticky="ew", pady=(0, 2))
+        ba_row = ttk.Frame(f3)
+        ba_row.grid(row=4, column=0, sticky="ew", pady=(0, 2))
+        ttk.Entry(ba_row, textvariable=self.sv_brand_auth_url) \
+            .pack(side="left", fill="x", expand=True)
+        ttk.Button(ba_row, text="Browse file...",
+                   command=lambda: self._browse_file(self.sv_brand_auth_url)) \
+            .pack(side="left", padx=(8, 0))
         ttk.Label(f3,
-            text='Required column: "child_shopid"',
+            text='Column: "child_shopid"  |  If URL fails, click "Browse file..." to use a local Excel instead',
             font=self.fnt_hint).grid(row=5, column=0, sticky="w")
+
         f3.columnconfigure(0, weight=1)
 
         # Step 4 — Output folder
