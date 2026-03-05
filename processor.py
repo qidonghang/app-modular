@@ -12,8 +12,40 @@ Three functions, called in order by run_processing():
 import os
 import re
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
 
 from sheets import fetch_sheet
+
+
+# ── Module-level constants ─────────────────────────────────────────────────────
+
+# The required output columns in order (A to M before the two blank columns)
+OUTPUT_COLS = [
+    "shipping_traceno", "ordersn_list", "consolidated_type",
+    "orderid", "lm_tracking_number", "shopid", "cogs_sls",
+    "if_delivered", "actual_weight", "gp_account_name",
+    "child_account_name", "sorting_instruction",
+]
+
+
+# ── Shared utilities ───────────────────────────────────────────────────────────
+
+def _log(msg: str, tag: str, log_fn) -> None:
+    """Send a message to the UI log panel. Does nothing if log_fn is None."""
+    if log_fn:
+        log_fn(msg, tag)
+
+
+def _norm_id(x) -> str:
+    """
+    Normalize a shop ID or order ID to a plain integer string.
+    e.g.  "12345.0"  →  "12345"
+          "12345"    →  "12345"
+    """
+    try:
+        return str(int(float(str(x).strip())))
+    except Exception:
+        return str(x).strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -33,13 +65,9 @@ def merge_manifest(ai: pd.DataFrame, mnf: pd.DataFrame, log_fn=None) -> pd.DataF
 
     Join key: All Info.ordersn_list  ←→  Manifest.ordersn
     """
-    def log(msg, tag=""):
-        if log_fn:
-            log_fn(msg, tag)
-
     # Guard: make sure both sides have the join columns
     if "ordersn" not in mnf.columns or "ordersn_list" not in ai.columns:
-        log("    ordersn / ordersn_list column missing — skipping merge", "warn")
+        _log("    ordersn / ordersn_list column missing — skipping merge", "warn", log_fn)
         return ai.copy()
 
     # Keep only the columns we actually need from Manifest
@@ -71,7 +99,7 @@ def merge_manifest(ai: pd.DataFrame, mnf: pd.DataFrame, log_fn=None) -> pd.DataF
     # Report how many rows ended up with no item_name (unmatched orders)
     no_item = result.get("item_name", pd.Series(dtype=str)).isna().sum()
     if no_item:
-        log(f"    {no_item:,} rows have no item_name after merge (ordersn not in Manifest)", "warn")
+        _log(f"    {no_item:,} rows have no item_name after merge (ordersn not in Manifest)", "warn", log_fn)
 
     return result
 
@@ -95,13 +123,9 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
     Parameters
     ----------
     df    : merged DataFrame (output of merge_manifest)
-    bj_df : Brand Judge Google Sheet (or None if not provided)
-    ba_df : Brand Authorization Google Sheet (or None if not provided)
+    bj_df : Brand Judge sheet (or None if not provided)
+    ba_df : Brand Authorization sheet (or None if not provided)
     """
-    def log(msg, tag=""):
-        if log_fn:
-            log_fn(msg, tag)
-
     # ── Parse Brand Judge sheet ──────────────────────────────────────────────
     brand_terms = []   # list of brand keywords to search in item_name
     item_excl   = []   # item_name keywords that cancel a brand hit
@@ -117,26 +141,26 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
 
         c_brand = _find_col(bj.columns, "item name brand")
         c_iexcl = _find_col(bj.columns, "item name exclude")
-        c_cexcl = _find_col(bj.columns, "sub_cagtegory")  # note: intentional typo matches real column
+        c_cexcl = _find_col(bj.columns, "sub_cagtegory")  # intentional typo matches real column
 
         if c_brand:
             brand_terms = bj[c_brand].dropna().str.strip().tolist()
             preview = brand_terms[:5]
             suffix = "..." if len(brand_terms) > 5 else ""
-            log(f"    Brands ({len(brand_terms)}): {preview}{suffix}", "info")
+            _log(f"    Brands ({len(brand_terms)}): {preview}{suffix}", "info", log_fn)
 
         if c_iexcl:
             item_excl = bj[c_iexcl].dropna().str.strip().tolist()
             preview = item_excl[:4]
             suffix = "..." if len(item_excl) > 4 else ""
-            log(f"    Item name excludes ({len(item_excl)}): {preview}{suffix}")
+            _log(f"    Item name excludes ({len(item_excl)}): {preview}{suffix}", "", log_fn)
 
         if c_cexcl:
             for cell in bj[c_cexcl].dropna().str.strip():
                 cat_excl.extend([t.strip() for t in re.split(r"[,;|、\n]+", cell) if t.strip()])
             preview = cat_excl[:4]
             suffix = "..." if len(cat_excl) > 4 else ""
-            log(f"    Category excludes ({len(cat_excl)}): {preview}{suffix}")
+            _log(f"    Category excludes ({len(cat_excl)}): {preview}{suffix}", "", log_fn)
 
     # ── Parse Brand Authorization sheet ─────────────────────────────────────
     auth_ids: set = set()
@@ -146,21 +170,15 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
         ba.columns = ba.columns.str.strip()
         sc = next((c for c in ba.columns if "child_shopid" in c.lower()), None)
         if sc:
-            def _to_int_str(x):
-                """Convert shopid to plain integer string (removes .0 from floats)."""
-                try:
-                    return str(int(float(str(x).strip())))
-                except Exception:
-                    return str(x).strip()
-            auth_ids = set(ba[sc].dropna().apply(_to_int_str))
-            log(f"    Authorized shop IDs: {len(auth_ids):,}", "info")
+            auth_ids = set(ba[sc].dropna().apply(_norm_id))
+            _log(f"    Authorized shop IDs: {len(auth_ids):,}", "info", log_fn)
         else:
-            log("    Brand Auth: column 'child_shopid' not found", "warn")
+            _log("    Brand Auth: column 'child_shopid' not found", "warn", log_fn)
 
     # ── Split CN vs non-CN ───────────────────────────────────────────────────
     is_cn = df.get("country", pd.Series(dtype=str)).str.strip().str.upper() == "CN"
-    log(f"    Non-CN rows (pass-through): {(~is_cn).sum():,}")
-    log(f"    CN rows (brand check)     : {is_cn.sum():,}")
+    _log(f"    Non-CN rows (pass-through): {(~is_cn).sum():,}", "", log_fn)
+    _log(f"    CN rows (brand check)     : {is_cn.sum():,}", "", log_fn)
 
     if not is_cn.any():
         return df  # nothing CN, nothing to do
@@ -172,13 +190,7 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
     ss = cn.get("sub_category",    pd.Series("", index=cn.index)).fillna("").astype(str)
     sl = cn.get("level3_category", pd.Series("", index=cn.index)).fillna("").astype(str)
 
-    def _norm_shopid(x):
-        try:
-            return str(int(float(str(x).strip())))
-        except Exception:
-            return str(x).strip()
-
-    sid_norm = cn.get("shopid", pd.Series("", index=cn.index)).apply(_norm_shopid)
+    sid_norm = cn.get("shopid", pd.Series("", index=cn.index)).apply(_norm_id)
 
     # Build regex patterns once (faster than per-row string searching)
     ie_pat = ("|".join(re.escape(t) for t in item_excl)) if item_excl else None
@@ -206,13 +218,12 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
                            sl.str.contains(ce_pat, case=False, na=False))
 
         # Hit + not excluded + not an authorized shop → HKP-F
-        brand_hkp = hit & (~excl) & (~sid_norm.isin(auth_ids))
-        hkp_mask |= brand_hkp
+        hkp_mask |= hit & (~excl) & (~sid_norm.isin(auth_ids))
 
     cn.loc[hkp_mask, "sorting_instruction"] = "HKP-F"
 
-    log(f"    CN rows kept as-is : {(~hkp_mask).sum():,}", "ok")
-    log(f"    CN rows → HKP-F   : {int(hkp_mask.sum()):,}", "ok")
+    _log(f"    CN rows kept as-is : {(~hkp_mask).sum():,}", "ok", log_fn)
+    _log(f"    CN rows → HKP-F   : {int(hkp_mask.sum()):,}", "ok", log_fn)
 
     # Recombine non-CN and CN rows
     return pd.concat([df[~is_cn], cn], ignore_index=True)
@@ -232,59 +243,61 @@ def run_processing(params: dict, log_fn=None) -> dict:
         batch_no        — text entered in Step 1
         all_info_path   — path to All Info Excel file
         manifest_path   — path to Manifest Excel file
-        brand_judge_url — Google Sheets URL (Brand Judge)
-        brand_auth_url  — Google Sheets URL (Brand Authorization)
+        brand_judge_url — Google Sheets URL or local file (Brand Judge)
+        brand_auth_url  — Google Sheets URL or local file (Brand Authorization)
         out_dir         — folder where the output file will be saved
 
     Returns
     -------
     dict with keys: out_path, out_fname, rows, hkp_f, out_dir
     """
-    def log(msg, tag=""):
-        if log_fn:
-            log_fn(msg, tag)
-
     batch_no  = params["batch_no"]
     out_dir   = params["out_dir"]
     out_fname = f"Sorting Instruction of {batch_no}.xlsx"
     out_path  = os.path.join(out_dir, out_fname)
 
-    log("=" * 65, "dim")
-    log("  SLS Sorting Instruction Generator  v2.0", "info")
-    log("=" * 65, "dim")
-    log(f"Batch No : {batch_no}", "info")
-    log(f"Output   : {out_fname}", "info")
+    _log("=" * 65, "dim", log_fn)
+    _log("  SLS Sorting Instruction Generator  v2.0", "info", log_fn)
+    _log("=" * 65, "dim", log_fn)
+    _log(f"Batch No : {batch_no}", "info", log_fn)
+    _log(f"Output   : {out_fname}", "info", log_fn)
 
-    # 1/5 — Load All Info
-    log("\n[1/5]  Loading All Info ...")
-    all_info = pd.read_excel(params["all_info_path"], sheet_name=0, engine="openpyxl", dtype=str)
+    # 1+2/5 — Load All Info and Manifest in parallel (both are independent)
+    _log("\n[1/5]  Loading Excel files (parallel) ...", "", log_fn)
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_ai  = ex.submit(pd.read_excel, params["all_info_path"],  0, "openpyxl")
+        f_mnf = ex.submit(pd.read_excel, params["manifest_path"],  0, "openpyxl")
+        all_info = f_ai.result().astype(str)
+        manifest = f_mnf.result().astype(str)
+
     all_info.columns = all_info.columns.str.strip()
+    manifest.columns = manifest.columns.str.strip()
+
     cn_count = (all_info.get("country", pd.Series(dtype=str))
                 .str.strip().str.upper() == "CN").sum()
-    log(f"    Rows: {len(all_info):,}  |  CN: {cn_count:,}  |  Non-CN: {len(all_info)-cn_count:,}", "ok")
+    _log(f"    All Info — Rows: {len(all_info):,}  |  CN: {cn_count:,}  |  Non-CN: {len(all_info)-cn_count:,}", "ok", log_fn)
+    _log(f"    Manifest — Rows: {len(manifest):,}", "ok", log_fn)
 
-    # 2/5 — Load Manifest
-    log("\n[2/5]  Loading Manifest ...")
-    manifest = pd.read_excel(params["manifest_path"], sheet_name=0, engine="openpyxl", dtype=str)
-    manifest.columns = manifest.columns.str.strip()
-    log(f"    Rows: {len(manifest):,}", "ok")
     missing_mnf = [c for c in ["ordersn", "item_name", "sub_category", "level3_category"]
                    if c not in manifest.columns]
     if missing_mnf:
-        log(f"    Missing columns in Manifest: {missing_mnf}", "warn")
+        _log(f"    Missing columns in Manifest: {missing_mnf}", "warn", log_fn)
 
-    # 3/5 — Fetch Google Sheets
-    log("\n[3/5]  Fetching Google Sheets ...")
-    brand_judge_df = fetch_sheet(params["brand_judge_url"], "Brand Judge",        log_fn)
-    brand_auth_df  = fetch_sheet(params["brand_auth_url"],  "Brand Authorization", log_fn)
+    # 3/5 — Fetch Brand sheets in parallel (both are independent)
+    _log("\n[3/5]  Fetching brand data (parallel) ...", "", log_fn)
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_bj = ex.submit(fetch_sheet, params["brand_judge_url"], "Brand Judge",        log_fn)
+        f_ba = ex.submit(fetch_sheet, params["brand_auth_url"],  "Brand Authorization", log_fn)
+        brand_judge_df = f_bj.result()
+        brand_auth_df  = f_ba.result()
 
     # 4/5 — Merge
-    log("\n[4/5]  Merging All Info + Manifest ...")
+    _log("\n[4/5]  Merging All Info + Manifest ...", "", log_fn)
     merged = merge_manifest(all_info, manifest, log_fn)
-    log(f"    After merge: {len(merged):,} rows", "ok")
+    _log(f"    After merge: {len(merged):,} rows", "ok", log_fn)
 
     # 5/5 — Brand routing
-    log("\n[5/5]  Applying CN brand routing ...")
+    _log("\n[5/5]  Applying CN brand routing ...", "", log_fn)
     merged = apply_brand_routing(merged, brand_judge_df, brand_auth_df, log_fn)
 
     # HKP-F propagation:
@@ -300,24 +313,18 @@ def run_processing(params: dict, log_fn=None) -> dict:
             extra = int(propagated.sum()) - int((merged["sorting_instruction"] == "HKP-F").sum())
             if extra > 0:
                 merged.loc[propagated, "sorting_instruction"] = "HKP-F"
-                log(f"    HKP-F propagated to {extra:,} additional rows on same traceno", "warn")
+                _log(f"    HKP-F propagated to {extra:,} additional rows on same traceno", "warn", log_fn)
 
     # Dedup: keep one row per shipping_traceno
     before = len(merged)
     merged = merged.drop_duplicates(subset=["shipping_traceno"], keep="first")
-    log(f"\nDedup on shipping_traceno: {before:,} → {len(merged):,} rows", "ok")
+    _log(f"\nDedup on shipping_traceno: {before:,} → {len(merged):,} rows", "ok", log_fn)
 
     # Build the final output with the required columns in the right order
-    OUTPUT_COLS = [
-        "shipping_traceno", "ordersn_list", "consolidated_type",
-        "orderid", "lm_tracking_number", "shopid", "cogs_sls",
-        "if_delivered", "actual_weight", "gp_account_name",
-        "child_account_name", "sorting_instruction",
-    ]
     present     = [c for c in OUTPUT_COLS if c in merged.columns]
     missing_out = [c for c in OUTPUT_COLS if c not in merged.columns]
     if missing_out:
-        log(f"    Columns not found in All Info: {missing_out}", "warn")
+        _log(f"    Columns not found in All Info: {missing_out}", "warn", log_fn)
 
     result = merged[present].copy()
     result["return_lm_tracking_number"] = ""   # always blank per spec
@@ -327,10 +334,10 @@ def run_processing(params: dict, log_fn=None) -> dict:
     result.to_excel(out_path, index=False, sheet_name="Sheet1")
 
     hkp_f = int((result.get("sorting_instruction", pd.Series(dtype=str)) == "HKP-F").sum())
-    log("\n" + "=" * 65, "dim")
-    log(f"DONE  |  Rows: {len(result):,}  |  HKP-F: {hkp_f:,}", "ok")
-    log(f"Saved → {out_fname}", "ok")
-    log("=" * 65, "dim")
+    _log("\n" + "=" * 65, "dim", log_fn)
+    _log(f"DONE  |  Rows: {len(result):,}  |  HKP-F: {hkp_f:,}", "ok", log_fn)
+    _log(f"Saved → {out_fname}", "ok", log_fn)
+    _log("=" * 65, "dim", log_fn)
 
     return {
         "out_path":  out_path,

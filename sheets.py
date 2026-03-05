@@ -1,13 +1,11 @@
 """
 sheets.py
 ---------
-One job: download a public Google Sheet and return it as a pandas DataFrame.
+Load brand data as a pandas DataFrame — from a Google Sheets URL or a local file.
 
-How it works:
-  1. Parse the spreadsheet ID from the URL  (the long code after /d/)
-  2. Parse the sheet tab ID (gid=...)       (defaults to first tab if missing)
-  3. Build a direct CSV download URL
-  4. Read it with pandas
+Two modes (auto-detected):
+  1. Google Sheets URL  → parse spreadsheet ID + tab ID, fetch as CSV
+  2. Local file path    → read .xlsx / .xls / .csv directly from disk
 """
 
 import os

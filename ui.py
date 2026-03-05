@@ -22,6 +22,9 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from processor import run_processing
 import config
 
+# Background colour — defined once so _build_ui and _apply_theme stay in sync
+_BG = "#FAFAFA"
+
 # Windows DPI fix — makes text sharp on high-resolution screens
 try:
     import ctypes
@@ -86,7 +89,7 @@ class SLSSortingApp:
         style.theme_use("clam")
 
         # Shopee colour palette
-        BG     = "#FAFAFA"   # near-white background
+        BG     = _BG         # near-white background (defined at module level)
         FG     = "#333333"   # dark text
         MID    = "#666666"   # medium grey text
         ORANGE = "#EE4D2D"   # Shopee signature orange
@@ -94,7 +97,7 @@ class SLSSortingApp:
         ORANGE_LIGHT = "#FFF3F0"   # subtle tint for button hover
         BORDER = "#F0D0C8"   # soft orange border for sections
 
-        self.root.configure(bg=BG)
+        self.root.configure(bg=_BG)
         style.configure("TFrame",            background=BG)
         style.configure("TLabelframe",       background=BG, bordercolor=BORDER, relief="solid")
         style.configure("TLabelframe.Label", background=BG, foreground=ORANGE, font=("Arial", 13, "bold"))
@@ -129,7 +132,7 @@ class SLSSortingApp:
         # Outer frame + scrollable canvas (so the window can be resized)
         outer  = ttk.Frame(self.root)
         outer.pack(fill="both", expand=True)
-        canvas = tk.Canvas(outer, highlightthickness=0, bg="#FAFAFA")
+        canvas = tk.Canvas(outer, highlightthickness=0, bg=_BG)
         vscr   = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         self.body = ttk.Frame(canvas)
         self.body.bind("<Configure>",
@@ -181,8 +184,10 @@ class SLSSortingApp:
         ttk.Entry(bj_row, textvariable=self.sv_brand_judge_url) \
             .pack(side="left", fill="x", expand=True)
         ttk.Button(bj_row, text="Browse file...",
-                   command=lambda: self._browse_file(self.sv_brand_judge_url)) \
-            .pack(side="left", padx=(8, 0))
+                   command=lambda: self._browse_file(
+                       self.sv_brand_judge_url,
+                       [("Excel/CSV files", "*.xlsx *.xls *.csv"), ("All files", "*.*")]
+                   )).pack(side="left", padx=(8, 0))
         ttk.Label(f3,
             text='Columns: "item name brand"  |  "item name exclude"  |  "sub_cagtegory & level3_category exclue"',
             font=self.fnt_hint).grid(row=2, column=0, sticky="w", pady=(0, 10))
@@ -194,8 +199,10 @@ class SLSSortingApp:
         ttk.Entry(ba_row, textvariable=self.sv_brand_auth_url) \
             .pack(side="left", fill="x", expand=True)
         ttk.Button(ba_row, text="Browse file...",
-                   command=lambda: self._browse_file(self.sv_brand_auth_url)) \
-            .pack(side="left", padx=(8, 0))
+                   command=lambda: self._browse_file(
+                       self.sv_brand_auth_url,
+                       [("Excel/CSV files", "*.xlsx *.xls *.csv"), ("All files", "*.*")]
+                   )).pack(side="left", padx=(8, 0))
         ttk.Label(f3,
             text='Column: "child_shopid"  |  If URL fails, click "Browse file..." to use a local Excel instead',
             font=self.fnt_hint).grid(row=5, column=0, sticky="w")
@@ -246,10 +253,10 @@ class SLSSortingApp:
 
     # ── File / Folder Pickers ─────────────────────────────────────────────────
 
-    def _browse_file(self, sv):
-        p = filedialog.askopenfilename(
-            title="Select Excel file",
-            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
+    def _browse_file(self, sv, filetypes=None):
+        if filetypes is None:
+            filetypes = [("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
+        p = filedialog.askopenfilename(title="Select file", filetypes=filetypes)
         if p:
             sv.set(p)
 
