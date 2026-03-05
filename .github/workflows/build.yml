@@ -1,0 +1,72 @@
+name: Build Windows EXE
+
+# When does this robot run?
+# 1. Every time you push code to the master branch
+# 2. Manually — you can click "Run workflow" on GitHub anytime
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Use a Windows cloud computer (provided by GitHub, free)
+    runs-on: windows-latest
+
+    steps:
+      # Step 1: Download your code onto the Windows machine
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Install Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Step 3: Install the required packages
+      - name: Install dependencies
+        run: |
+          pip install pandas openpyxl pyinstaller
+
+      # Step 4: Build the EXE using PyInstaller
+      - name: Build EXE with PyInstaller
+        run: |
+          pyinstaller --noconfirm --onefile --windowed `
+            --name "SLS Sorting Instruction Tool" `
+            --hidden-import pandas `
+            --hidden-import pandas.io.formats.excel `
+            --hidden-import pandas.io.excel._openpyxl `
+            --hidden-import openpyxl `
+            --hidden-import openpyxl.cell._writer `
+            --hidden-import openpyxl.styles `
+            --hidden-import openpyxl.styles.fonts `
+            --hidden-import openpyxl.styles.fills `
+            --hidden-import openpyxl.styles.borders `
+            --hidden-import openpyxl.utils `
+            --hidden-import openpyxl.utils.dataframe `
+            --hidden-import openpyxl.workbook `
+            --hidden-import openpyxl.writer.excel `
+            --hidden-import tkinter `
+            --hidden-import tkinter.ttk `
+            --hidden-import tkinter.scrolledtext `
+            --hidden-import tkinter.filedialog `
+            --hidden-import tkinter.messagebox `
+            --hidden-import tkinter.font `
+            --hidden-import urllib.request `
+            --hidden-import urllib.parse `
+            --exclude-module matplotlib `
+            --exclude-module scipy `
+            --exclude-module notebook `
+            --exclude-module IPython `
+            --exclude-module PIL `
+            --exclude-module cv2 `
+            main.py
+
+      # Step 5: Make the .exe available for download on GitHub
+      - name: Upload EXE as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SLS-Sorting-Instruction-Tool
+          path: "dist/SLS Sorting Instruction Tool.exe"
+          retention-days: 30
