@@ -286,28 +286,37 @@ def run_processing(params: dict, log_fn=None) -> dict:
         brand_judge_df = f_bj.result()
         brand_auth_df  = f_ba.result()
 
-    # 4/5 — Merge
-    _log("\n[4/5]  Merging All Info + Manifest ...", "", log_fn)
-    merged = merge_manifest(all_info, manifest, log_fn)
-    _log(f"    After merge: {len(merged):,} rows", "ok", log_fn)
+    # Split CN vs non-CN upfront — non-CN rows are never merged or routed
+    is_cn = all_info.get("country", pd.Series(dtype=str)).str.strip().str.upper() == "CN"
+    non_cn = all_info[~is_cn].copy()
+    cn_only = all_info[is_cn].copy()
 
-    # 5/5 — Brand routing
+    # 4/5 — Merge CN rows with Manifest only
+    _log("\n[4/5]  Merging CN rows with Manifest ...", "", log_fn)
+    merged_cn = merge_manifest(cn_only, manifest, log_fn)
+    _log(f"    CN after merge: {len(merged_cn):,} rows  (Non-CN untouched: {len(non_cn):,})", "ok", log_fn)
+
+    # 5/5 — Brand routing on CN rows only
     _log("\n[5/5]  Applying CN brand routing ...", "", log_fn)
-    merged = apply_brand_routing(merged, brand_judge_df, brand_auth_df, log_fn)
+    routed_cn = apply_brand_routing(merged_cn, brand_judge_df, brand_auth_df, log_fn)
 
-    # Dedup: one row per shipping_traceno.
+    # Dedup CN rows: one row per shipping_traceno.
     # Sort HKP-F rows first within each traceno — so if ANY item in the order
     # triggers HKP-F, the kept row reflects that result.
-    before = len(merged)
-    si_col = merged.get("sorting_instruction", pd.Series("", index=merged.index))
-    merged = (
-        merged
+    before = len(routed_cn)
+    si_col = routed_cn.get("sorting_instruction", pd.Series("", index=routed_cn.index))
+    routed_cn = (
+        routed_cn
         .assign(_hkp_first=(si_col != "HKP-F").astype(int))
         .sort_values(["shipping_traceno", "_hkp_first"])
         .drop(columns=["_hkp_first"])
         .drop_duplicates(subset=["shipping_traceno"], keep="first")
     )
-    _log(f"\nDedup on shipping_traceno: {before:,} → {len(merged):,} rows", "ok", log_fn)
+    _log(f"\nDedup CN rows: {before:,} → {len(routed_cn):,}", "ok", log_fn)
+
+    # Recombine: non-CN rows (unchanged) + deduped CN rows
+    merged = pd.concat([non_cn, routed_cn], ignore_index=True)
+    _log(f"Final rows (non-CN + CN): {len(merged):,}", "ok", log_fn)
 
     # Build the final output with the required columns in the right order
     present     = [c for c in OUTPUT_COLS if c in merged.columns]
