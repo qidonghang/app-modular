@@ -8,6 +8,10 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+# Needed so the workflow can create/update GitHub Releases
+permissions:
+  contents: write
+
 jobs:
   build:
     # Use a Windows cloud computer (provided by GitHub, free)
@@ -65,10 +69,13 @@ jobs:
             --exclude-module cv2 `
             main.py
 
-      # Step 5: Make the .exe available for download on GitHub
-      - name: Upload EXE as artifact
-        uses: actions/upload-artifact@v4
+      # Step 5: Publish a GitHub Release so anyone can download the .exe
+      # The "latest" release is overwritten on every push — always up to date
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: SortFlow
-          path: "dist/SortFlow.exe"
-          retention-days: 30
+          tag_name: latest
+          name: SortFlow — latest build
+          body: Automatically built from the latest code on master.
+          files: dist/SortFlow.exe
+          make_latest: true
