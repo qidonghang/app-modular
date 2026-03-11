@@ -262,8 +262,8 @@ def run_processing(params: dict, log_fn=None) -> dict:
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_ai  = ex.submit(pd.read_excel, params["all_info_path"],  sheet_name=0, engine="openpyxl")
         f_mnf = ex.submit(pd.read_excel, params["manifest_path"], sheet_name=0, engine="openpyxl")
-        all_info = f_ai.result().astype(str)
-        manifest = f_mnf.result().astype(str)
+        all_info = f_ai.result().astype(str).replace("nan", "")
+        manifest = f_mnf.result().astype(str).replace("nan", "")
 
     all_info.columns = all_info.columns.str.strip()
     manifest.columns = manifest.columns.str.strip()
