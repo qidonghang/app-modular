@@ -7,8 +7,8 @@
 It takes Shopee SLS package data and automatically decides the **sorting instruction**
 for each package: either keep the existing value, or change it to **HKP-F**.
 
-- Packages from countries other than China → keep as-is, no changes
-- Packages from China (CN) → run a brand check to decide CN or HKP-F
+- Packages with `sorting_instruction` = **CN** → run a brand check to decide CN or HKP-F
+- Packages with any other value (HKD, HKP-CN, TWS02 seller, scrap-lost, …) → keep as-is, never touched
 
 ---
 
@@ -88,11 +88,10 @@ Output file will be saved as: `Sorting Instruction of [Batch No].xlsx`
 ### All Info Excel
 | Column | Used for |
 |--------|----------|
-| `country` | Decide CN vs non-CN |
+| `sorting_instruction` | Split key — only rows with value `CN` go through brand routing; all other values pass through unchanged |
 | `shipping_traceno` | Unique key per package |
 | `orderid` | Join key to Manifest |
 | `shopid` | Check brand authorization |
-| `sorting_instruction` | Base value (may be overwritten to HKP-F) |
 | `ordersn_list`, `consolidated_type`, `lm_tracking_number`, `cogs_sls`, `if_delivered`, `actual_weight`, `gp_account_name`, `child_account_name` | Copied to output |
 
 ### Manifest Excel
@@ -119,7 +118,7 @@ Output file will be saved as: `Sorting Instruction of [Batch No].xlsx`
 
 ## CN Brand Routing Logic (plain English)
 
-For each CN package, go through these checks in order:
+For each row where `sorting_instruction == "CN"`, go through these checks in order:
 
 ```
 1. Does item_name contain any brand from Brand Judge?
@@ -163,7 +162,7 @@ One bad item = the whole parcel flagged.
 | `actual_weight` | All Info |
 | `gp_account_name` | All Info |
 | `child_account_name` | All Info |
-| `sorting_instruction` | All Info (may be changed to HKP-F) |
+| `sorting_instruction` | All Info — rows that were `CN` may be changed to `HKP-F`; all other values are preserved exactly |
 | `return_lm_tracking_number` | Always blank |
 | `special remark` | Always blank |
 
