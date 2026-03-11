@@ -170,10 +170,10 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
         else:
             _log("    Brand Auth: column 'child_shopid' not found", "warn", log_fn)
 
-    # ── Split CN vs non-CN ───────────────────────────────────────────────────
-    is_cn = df.get("country", pd.Series(dtype=str)).str.strip().str.upper() == "CN"
-    _log(f"    Non-CN rows (pass-through): {(~is_cn).sum():,}", "", log_fn)
-    _log(f"    CN rows (brand check)     : {is_cn.sum():,}", "", log_fn)
+    # ── Split: only rows with sorting_instruction == "CN" get brand routing ──
+    is_cn = df.get("sorting_instruction", pd.Series(dtype=str)).str.strip().str.upper() == "CN"
+    _log(f"    Pass-through (not CN): {(~is_cn).sum():,}", "", log_fn)
+    _log(f"    Brand check (CN)     : {is_cn.sum():,}", "", log_fn)
 
     if not is_cn.any():
         return df  # nothing CN, nothing to do
@@ -268,9 +268,9 @@ def run_processing(params: dict, log_fn=None) -> dict:
     all_info.columns = all_info.columns.str.strip()
     manifest.columns = manifest.columns.str.strip()
 
-    cn_count = (all_info.get("country", pd.Series(dtype=str))
+    cn_count = (all_info.get("sorting_instruction", pd.Series(dtype=str))
                 .str.strip().str.upper() == "CN").sum()
-    _log(f"    All Info — Rows: {len(all_info):,}  |  CN: {cn_count:,}  |  Non-CN: {len(all_info)-cn_count:,}", "ok", log_fn)
+    _log(f"    All Info — Rows: {len(all_info):,}  |  sorting=CN: {cn_count:,}  |  Other: {len(all_info)-cn_count:,}", "ok", log_fn)
     _log(f"    Manifest — Rows: {len(manifest):,}", "ok", log_fn)
 
     missing_mnf = [c for c in ["orderid", "item_name", "sub_category", "level3_category"]
@@ -286,15 +286,17 @@ def run_processing(params: dict, log_fn=None) -> dict:
         brand_judge_df = f_bj.result()
         brand_auth_df  = f_ba.result()
 
-    # Split CN vs non-CN upfront — non-CN rows are never merged or routed
-    is_cn = all_info.get("country", pd.Series(dtype=str)).str.strip().str.upper() == "CN"
+    # Split by sorting_instruction == "CN" — only these rows go through brand routing.
+    # Rows with any other value (HKD, HKP-CN, TWS02 seller, scrap-lost, …) are
+    # never touched, regardless of the country column.
+    is_cn = all_info.get("sorting_instruction", pd.Series(dtype=str)).str.strip().str.upper() == "CN"
     non_cn = all_info[~is_cn].copy()
     cn_only = all_info[is_cn].copy()
 
     # 4/5 — Merge CN rows with Manifest only
     _log("\n[4/5]  Merging CN rows with Manifest ...", "", log_fn)
     merged_cn = merge_manifest(cn_only, manifest, log_fn)
-    _log(f"    CN after merge: {len(merged_cn):,} rows  (Non-CN untouched: {len(non_cn):,})", "ok", log_fn)
+    _log(f"    sorting=CN after merge: {len(merged_cn):,} rows  (Others untouched: {len(non_cn):,})", "ok", log_fn)
 
     # 5/5 — Brand routing on CN rows only
     _log("\n[5/5]  Applying CN brand routing ...", "", log_fn)
