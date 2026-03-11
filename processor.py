@@ -260,8 +260,8 @@ def run_processing(params: dict, log_fn=None) -> dict:
     # 1+2/5 — Load All Info and Manifest in parallel (both are independent)
     _log("\n[1/5]  Loading Excel files (parallel) ...", "", log_fn)
     with ThreadPoolExecutor(max_workers=2) as ex:
-        f_ai  = ex.submit(pd.read_excel, params["all_info_path"],  0, "openpyxl")
-        f_mnf = ex.submit(pd.read_excel, params["manifest_path"],  0, "openpyxl")
+        f_ai  = ex.submit(pd.read_excel, params["all_info_path"],  sheet_name=0, engine="openpyxl")
+        f_mnf = ex.submit(pd.read_excel, params["manifest_path"], sheet_name=0, engine="openpyxl")
         all_info = f_ai.result().astype(str)
         manifest = f_mnf.result().astype(str)
 
