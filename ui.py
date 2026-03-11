@@ -329,14 +329,16 @@ class SLSSortingApp:
                 "out_dir":         self.sv_output_dir.get().strip(),
             }
             result = run_processing(params, log_fn=self._log)
-            messagebox.showinfo("Complete",
+            # Schedule popup on the main thread (required on macOS)
+            self.root.after(0, lambda: messagebox.showinfo("Complete",
                 f"File saved!\n\n"
                 f"File  : {result['out_fname']}\n"
                 f"Rows  : {result['rows']:,}\n"
                 f"HKP-F : {result['hkp_f']:,}\n\n"
-                f"Location:\n{result['out_dir']}")
+                f"Location:\n{result['out_dir']}"))
         except Exception as exc:
-            self._log(f"\nFATAL ERROR: {exc}", "err")
-            messagebox.showerror("Error", str(exc))
+            msg = str(exc)
+            self._log(f"\nFATAL ERROR: {msg}", "err")
+            self.root.after(0, lambda: messagebox.showerror("Error", msg))
         finally:
-            self.btn_run.config(state="normal")
+            self.root.after(0, lambda: self.btn_run.config(state="normal"))
