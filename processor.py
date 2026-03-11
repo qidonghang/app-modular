@@ -141,7 +141,7 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
 
         c_brand = _find_col(bj.columns, "item name brand")
         c_iexcl = _find_col(bj.columns, "item name exclude")
-        c_cexcl = _find_col(bj.columns, "sub_cagtegory")  # intentional typo matches real column
+        c_cexcl = _find_col(bj.columns, "sub_category")
 
         if c_brand:
             brand_terms = bj[c_brand].dropna().str.strip().tolist()
@@ -300,24 +300,18 @@ def run_processing(params: dict, log_fn=None) -> dict:
     _log("\n[5/5]  Applying CN brand routing ...", "", log_fn)
     merged = apply_brand_routing(merged, brand_judge_df, brand_auth_df, log_fn)
 
-    # HKP-F propagation:
-    # If ANY row on a shipping_traceno is HKP-F, ALL rows of that traceno become HKP-F.
-    # (A single counterfeit item makes the whole parcel counterfeit.)
-    if "sorting_instruction" in merged.columns and "shipping_traceno" in merged.columns:
-        hkp_tracenos = set(
-            merged.loc[merged["sorting_instruction"] == "HKP-F", "shipping_traceno"]
-            .dropna().unique()
-        )
-        if hkp_tracenos:
-            propagated = merged["shipping_traceno"].isin(hkp_tracenos)
-            extra = int(propagated.sum()) - int((merged["sorting_instruction"] == "HKP-F").sum())
-            if extra > 0:
-                merged.loc[propagated, "sorting_instruction"] = "HKP-F"
-                _log(f"    HKP-F propagated to {extra:,} additional rows on same traceno", "warn", log_fn)
-
-    # Dedup: keep one row per shipping_traceno
+    # Dedup: one row per shipping_traceno.
+    # Sort HKP-F rows first within each traceno — so if ANY ordersn in a traceno
+    # triggers HKP-F, the kept row reflects that result.
     before = len(merged)
-    merged = merged.drop_duplicates(subset=["shipping_traceno"], keep="first")
+    si_col = merged.get("sorting_instruction", pd.Series("", index=merged.index))
+    merged = (
+        merged
+        .assign(_hkp_first=(si_col != "HKP-F").astype(int))
+        .sort_values(["shipping_traceno", "_hkp_first"])
+        .drop(columns=["_hkp_first"])
+        .drop_duplicates(subset=["shipping_traceno"], keep="first")
+    )
     _log(f"\nDedup on shipping_traceno: {before:,} → {len(merged):,} rows", "ok", log_fn)
 
     # Build the final output with the required columns in the right order
