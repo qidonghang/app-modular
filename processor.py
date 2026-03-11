@@ -105,19 +105,19 @@ def merge_manifest(ai: pd.DataFrame, mnf: pd.DataFrame, log_fn=None) -> pd.DataF
 
 def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataFrame:
     """
-    For every CN-origin row, decide: keep existing sorting_instruction or set HKP-F.
+    Apply brand routing to CN rows (sorting_instruction == "CN").
+    Caller guarantees that every row in df has sorting_instruction == "CN".
 
     Decision tree (per row):
-      - Non-CN package         → pass through unchanged
-      - CN, no brand match     → keep as-is
-      - CN, brand match BUT item_name contains an exclude keyword → keep as-is
-      - CN, brand match BUT category contains an exclude keyword  → keep as-is
-      - CN, brand match + shopid is authorized                    → keep as-is
-      - CN, brand match + shopid NOT authorized                   → HKP-F
+      - No brand match in item_name                           → keep "CN"
+      - Brand match + item_name contains an exclude keyword   → keep "CN"
+      - Brand match + category contains an exclude keyword    → keep "CN"
+      - Brand match + shopid is in Brand Authorization list   → keep "CN"
+      - Brand match + shopid NOT authorized                   → set "HKP-F"
 
     Parameters
     ----------
-    df    : merged DataFrame (output of merge_manifest)
+    df    : CN-only DataFrame (output of merge_manifest, all rows have sorting_instruction="CN")
     bj_df : Brand Judge sheet (or None if not provided)
     ba_df : Brand Authorization sheet (or None if not provided)
     """
@@ -170,29 +170,27 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
         else:
             _log("    Brand Auth: column 'child_shopid' not found", "warn", log_fn)
 
-    # ── Split: only rows with sorting_instruction == "CN" get brand routing ──
-    is_cn = df.get("sorting_instruction", pd.Series(dtype=str)).str.strip().str.upper() == "CN"
-    _log(f"    Pass-through (not CN): {(~is_cn).sum():,}", "", log_fn)
-    _log(f"    Brand check (CN)     : {is_cn.sum():,}", "", log_fn)
+    _log(f"    CN rows to check: {len(df):,}", "", log_fn)
 
-    if not is_cn.any():
-        return df  # nothing CN, nothing to do
+    if df.empty or not brand_terms:
+        _log("    No brand terms — all CN rows kept as-is", "", log_fn)
+        return df.copy()
 
-    cn = df[is_cn].copy()
+    df = df.copy()
 
     # Text columns used for matching
-    si = cn.get("item_name",       pd.Series("", index=cn.index)).fillna("").astype(str)
-    ss = cn.get("sub_category",    pd.Series("", index=cn.index)).fillna("").astype(str)
-    sl = cn.get("level3_category", pd.Series("", index=cn.index)).fillna("").astype(str)
+    si = df.get("item_name",       pd.Series("", index=df.index)).fillna("").astype(str)
+    ss = df.get("sub_category",    pd.Series("", index=df.index)).fillna("").astype(str)
+    sl = df.get("level3_category", pd.Series("", index=df.index)).fillna("").astype(str)
 
-    sid_norm = cn.get("shopid", pd.Series("", index=cn.index)).apply(_norm_id)
+    sid_norm = df.get("shopid", pd.Series("", index=df.index)).apply(_norm_id)
 
     # Build regex patterns once (faster than per-row string searching)
     ie_pat = ("|".join(re.escape(t) for t in item_excl)) if item_excl else None
     ce_pat = ("|".join(re.escape(t) for t in cat_excl))  if cat_excl  else None
 
     # hkp_mask: True for rows that will become HKP-F
-    hkp_mask = pd.Series(False, index=cn.index)
+    hkp_mask = pd.Series(False, index=df.index)
 
     # Check each brand independently (a row is HKP-F if ANY brand triggers it)
     for brand in brand_terms:
@@ -205,23 +203,22 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
             continue
 
         # Is this hit cancelled by an exclusion rule?
-        excl = pd.Series(False, index=cn.index)
+        excl = pd.Series(False, index=df.index)
         if ie_pat:
             excl |= hit & si.str.contains(ie_pat, case=False, na=False)
         if ce_pat:
-            excl |= hit & (ss.str.contains(ce_pat, case=False, na=False) |
-                           sl.str.contains(ce_pat, case=False, na=False))
+            excl |= hit & ss.str.contains(ce_pat, case=False, na=False)  # sub_category
+            excl |= hit & sl.str.contains(ce_pat, case=False, na=False)  # level3_category
 
         # Hit + not excluded + not an authorized shop → HKP-F
         hkp_mask |= hit & (~excl) & (~sid_norm.isin(auth_ids))
 
-    cn.loc[hkp_mask, "sorting_instruction"] = "HKP-F"
+    df.loc[hkp_mask, "sorting_instruction"] = "HKP-F"
 
     _log(f"    CN rows kept as-is : {(~hkp_mask).sum():,}", "ok", log_fn)
     _log(f"    CN rows → HKP-F   : {int(hkp_mask.sum()):,}", "ok", log_fn)
 
-    # Recombine non-CN and CN rows
-    return pd.concat([df[~is_cn], cn], ignore_index=True)
+    return df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
