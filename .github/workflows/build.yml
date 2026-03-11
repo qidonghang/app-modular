@@ -12,6 +12,8 @@ jobs:
   build:
     # Use a Windows cloud computer (provided by GitHub, free)
     runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       # Step 1: Download your code onto the Windows machine
