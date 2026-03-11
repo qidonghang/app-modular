@@ -47,7 +47,7 @@ class SLSSortingApp:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("SLS Sorting Instruction Generator  v2.0")
+        self.root.title("SortFlow — SLS Routing Tool")
         self.root.geometry("1100x1020")
         self.root.resizable(True, True)
 
@@ -147,9 +147,9 @@ class SLSSortingApp:
         PAD = {"padx": 18, "pady": 8}
 
         # Title
-        ttk.Label(self.body, text="SLS Sorting Instruction Generator",
+        ttk.Label(self.body, text="SortFlow",
                   font=self.fnt_title, foreground="#EE4D2D").pack(**PAD, anchor="w")
-        ttk.Label(self.body, text="Cross-Border Reverse Logistics  |  v2.0",
+        ttk.Label(self.body, text="SLS Sorting Instruction Generator  |  Cross-Border Reverse Logistics",
                   font=self.fnt_hint, foreground="#666666").pack(padx=18, pady=(0, 4), anchor="w")
         ttk.Separator(self.body, orient="horizontal").pack(fill="x", padx=14, pady=4)
 
@@ -189,7 +189,7 @@ class SLSSortingApp:
                        [("Excel/CSV files", "*.xlsx *.xls *.csv"), ("All files", "*.*")]
                    )).pack(side="left", padx=(8, 0))
         ttk.Label(f3,
-            text='Columns: "item name brand"  |  "item name exclude"  |  "sub_cagtegory & level3_category exclue"',
+            text='Columns: "item name brand"  |  "item name exclude"  |  "sub_category & level3_category exclude"',
             font=self.fnt_hint).grid(row=2, column=0, sticky="w", pady=(0, 10))
 
         ttk.Label(f3, text="Brand Authorization:") \

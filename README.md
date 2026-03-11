@@ -1,7 +1,4 @@
-# SLS Sorting Instruction Generator — Modular Version
-
-> This folder is a **refactored** (reorganized) version of the original single-file app.
-> The logic is identical — it's just split into smaller, easier-to-read files.
+# SortFlow — SLS Sorting Instruction Generator
 
 ---
 
@@ -93,15 +90,15 @@ Output file will be saved as: `Sorting Instruction of [Batch No].xlsx`
 |--------|----------|
 | `country` | Decide CN vs non-CN |
 | `shipping_traceno` | Unique key per package |
-| `ordersn_list` | Join to Manifest |
+| `orderid` | Join key to Manifest |
 | `shopid` | Check brand authorization |
 | `sorting_instruction` | Base value (may be overwritten to HKP-F) |
-| `ordersn_list`, `consolidated_type`, `orderid`, `lm_tracking_number`, `cogs_sls`, `if_delivered`, `actual_weight`, `gp_account_name`, `child_account_name` | Copied to output |
+| `ordersn_list`, `consolidated_type`, `lm_tracking_number`, `cogs_sls`, `if_delivered`, `actual_weight`, `gp_account_name`, `child_account_name` | Copied to output |
 
 ### Manifest Excel
 | Column | Used for |
 |--------|----------|
-| `ordersn` | Join key (matched to ordersn_list) |
+| `orderid` | Join key (matched to All Info orderid). May have multiple rows per orderid (one per item) |
 | `item_name` | Brand keyword search |
 | `sub_category` | Category exclusion check |
 | `level3_category` | Category exclusion check |
@@ -111,10 +108,7 @@ Output file will be saved as: `Sorting Instruction of [Batch No].xlsx`
 |--------|----------|
 | `item name brand` | List of brand keywords to look for |
 | `item name exclude` | If item_name also contains this → NOT HKP-F |
-| `sub_cagtegory & level3_category exclue` | If category contains this → NOT HKP-F |
-
-> Note: the column name `sub_cagtegory` has a typo — this is intentional,
-> it matches the real column name in the Google Sheet.
+| `sub_category & level3_category exclude` | If category contains this → NOT HKP-F |
 
 ### Brand Authorization Google Sheet
 | Column | Used for |
@@ -145,32 +139,33 @@ For each CN package, go through these checks in order:
       No  →  Set to HKP-F  ← counterfeit risk
 ```
 
-**After routing:** If any row on the same `shipping_traceno` becomes HKP-F,
-ALL rows on that traceno also become HKP-F. One bad item = the whole parcel.
+**After routing:** The Manifest may have multiple item rows per `orderid`.
+If any item triggers HKP-F, the `shipping_traceno` output row becomes HKP-F.
+One bad item = the whole parcel flagged.
 
-**Final step:** Keep only one row per `shipping_traceno` (dedup).
+**Final step:** Keep only one row per `shipping_traceno` (dedup, HKP-F kept first).
 
 ---
 
-## Output columns (A to O)
+## Output columns
 
-| Column | Source |
-|--------|--------|
-| A: Batch no | Entered in Step 1 |
-| B: shipping_traceno | All Info |
-| C: ordersn_list | All Info |
-| D: consolidated_type | All Info |
-| E: orderid | All Info |
-| F: lm_tracking_number | All Info |
-| G: shopid | All Info |
-| H: cogs_sls | All Info |
-| I: if_delivered | All Info |
-| J: actual_weight | All Info |
-| K: gp_account_name | All Info |
-| L: child_account_name | All Info |
-| M: sorting_instruction | All Info (may be changed to HKP-F) |
-| N: return_lm_tracking_number | Always blank |
-| O: special remark | Always blank |
+| Column name | Source |
+|-------------|--------|
+| `Batch no` | Entered in Step 1 |
+| `shipping_traceno` | All Info |
+| `ordersn_list` | All Info |
+| `consolidated_type` | All Info |
+| `orderid` | All Info |
+| `lm_tracking_number` | All Info |
+| `shopid` | All Info |
+| `cogs_sls` | All Info |
+| `if_delivered` | All Info |
+| `actual_weight` | All Info |
+| `gp_account_name` | All Info |
+| `child_account_name` | All Info |
+| `sorting_instruction` | All Info (may be changed to HKP-F) |
+| `return_lm_tracking_number` | Always blank |
+| `special remark` | Always blank |
 
 ---
 
@@ -178,7 +173,7 @@ ALL rows on that traceno also become HKP-F. One bad item = the whole parcel.
 
 | Problem | Likely cause | Fix |
 |---------|-------------|-----|
-| `item_name` all blank | Manifest `ordersn` column not matching `ordersn_list` | Check for extra spaces or different formats |
+| `item_name` all blank | Manifest `orderid` not matching All Info `orderid` | Check for extra spaces or different formats |
 | No HKP-F rows | Brand Judge URL not accessible | Make sure Google Sheet is set to "Anyone with the link can view" |
 | `child_shopid` not found | Column name spelling differs | Check the exact column name in your Google Sheet |
 | Google Sheets fetch fails | Sheet is not public | Open the sheet → Share → Change to "Anyone with the link" |

@@ -33,7 +33,7 @@ jobs:
       - name: Build EXE with PyInstaller
         run: |
           pyinstaller --noconfirm --onefile --windowed `
-            --name "SLS Sorting Instruction Tool" `
+            --name "SortFlow" `
             --hidden-import pandas `
             --hidden-import pandas.io.formats.excel `
             --hidden-import pandas.io.excel._openpyxl `
@@ -67,6 +67,6 @@ jobs:
       - name: Upload EXE as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SLS-Sorting-Instruction-Tool
-          path: "dist/SLS Sorting Instruction Tool.exe"
+          name: SortFlow
+          path: "dist/SortFlow.exe"
           retention-days: 30

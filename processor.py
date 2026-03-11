@@ -57,49 +57,44 @@ def merge_manifest(ai: pd.DataFrame, mnf: pd.DataFrame, log_fn=None) -> pd.DataF
     Join All Info (ai) with Manifest (mnf).
 
     Why this is needed:
-      - All Info has one row per package (shipping_traceno), with ordersn_list
-        that may contain multiple order numbers separated by commas.
-      - Manifest has one row per order (ordersn), with item details
-        (item_name, sub_category, level3_category).
-      - We need item details in order to run the brand check.
+      - All Info has one row per package (shipping_traceno), with a single orderid.
+      - Manifest may have MULTIPLE rows per orderid (one per item in the order),
+        with item details (item_name, sub_category, level3_category).
+      - We need item details to run the brand check across ALL items in the order.
+      - The join intentionally produces multiple rows per shipping_traceno when
+        an order has multiple items. Brand routing checks every item row, and
+        run_processing() deduplicates back to one row per shipping_traceno afterwards.
 
-    Join key: All Info.ordersn_list  ←→  Manifest.ordersn
+    Join key: All Info.orderid  ←→  Manifest.orderid
     """
-    # Guard: make sure both sides have the join columns
-    if "ordersn" not in mnf.columns or "ordersn_list" not in ai.columns:
-        _log("    ordersn / ordersn_list column missing — skipping merge", "warn", log_fn)
+    # Guard: make sure both sides have the join column
+    if "orderid" not in ai.columns or "orderid" not in mnf.columns:
+        _log("    orderid column missing in All Info or Manifest — skipping merge", "warn", log_fn)
         return ai.copy()
 
     # Keep only the columns we actually need from Manifest
-    mnf_cols = [c for c in ["ordersn", "item_name", "sub_category", "level3_category"]
+    mnf_cols = [c for c in ["orderid", "item_name", "sub_category", "level3_category"]
                 if c in mnf.columns]
-    mnf_sub = mnf[mnf_cols].dropna(subset=["ordersn"]).copy()
-    mnf_sub["ordersn"] = mnf_sub["ordersn"].str.strip()
-
-    # Explode ordersn_list: "A,B,C" becomes three separate rows
-    # so we can match each order number against Manifest
-    ai_exploded = ai.copy()
-    ai_exploded["_ordersn_key"] = ai_exploded["ordersn_list"].str.split(",")
-    ai_exploded = ai_exploded.explode("_ordersn_key")
-    ai_exploded["_ordersn_key"] = ai_exploded["_ordersn_key"].str.strip()
+    mnf_sub = mnf[mnf_cols].dropna(subset=["orderid"]).copy()
+    mnf_sub["orderid"] = mnf_sub["orderid"].str.strip()
 
     # Drop any manifest columns that already exist in ai (to avoid duplicates)
     detail_cols = [c for c in ["item_name", "sub_category", "level3_category"]
                    if c in mnf_sub.columns]
-    ai_exploded = ai_exploded.drop(columns=[c for c in detail_cols if c in ai_exploded.columns],
-                                   errors="ignore")
+    ai_clean = ai.drop(columns=[c for c in detail_cols if c in ai.columns], errors="ignore")
 
-    # Join: each exploded row gets its item details from Manifest
-    result = ai_exploded.merge(
-        mnf_sub.rename(columns={"ordersn": "_ordersn_key"}),
-        on="_ordersn_key",
-        how="left"
-    ).drop(columns=["_ordersn_key"])
+    # Left join on orderid.
+    # NOTE: Manifest may have multiple rows per orderid (multiple items in one order).
+    # In that case, the All Info row is duplicated — one copy per Manifest item.
+    # Brand routing will check ALL copies, so if any item triggers HKP-F the
+    # shipping_traceno is flagged. The dedup step in run_processing() then
+    # collapses them back to one row per shipping_traceno (HKP-F kept first).
+    result = ai_clean.merge(mnf_sub, on="orderid", how="left")
 
     # Report how many rows ended up with no item_name (unmatched orders)
     no_item = result.get("item_name", pd.Series(dtype=str)).isna().sum()
     if no_item:
-        _log(f"    {no_item:,} rows have no item_name after merge (ordersn not in Manifest)", "warn", log_fn)
+        _log(f"    {no_item:,} rows have no item_name after merge (orderid not in Manifest)", "warn", log_fn)
 
     return result
 
@@ -257,7 +252,7 @@ def run_processing(params: dict, log_fn=None) -> dict:
     out_path  = os.path.join(out_dir, out_fname)
 
     _log("=" * 65, "dim", log_fn)
-    _log("  SLS Sorting Instruction Generator  v2.0", "info", log_fn)
+    _log("  SortFlow — SLS Sorting Instruction Generator", "info", log_fn)
     _log("=" * 65, "dim", log_fn)
     _log(f"Batch No : {batch_no}", "info", log_fn)
     _log(f"Output   : {out_fname}", "info", log_fn)
@@ -278,7 +273,7 @@ def run_processing(params: dict, log_fn=None) -> dict:
     _log(f"    All Info — Rows: {len(all_info):,}  |  CN: {cn_count:,}  |  Non-CN: {len(all_info)-cn_count:,}", "ok", log_fn)
     _log(f"    Manifest — Rows: {len(manifest):,}", "ok", log_fn)
 
-    missing_mnf = [c for c in ["ordersn", "item_name", "sub_category", "level3_category"]
+    missing_mnf = [c for c in ["orderid", "item_name", "sub_category", "level3_category"]
                    if c not in manifest.columns]
     if missing_mnf:
         _log(f"    Missing columns in Manifest: {missing_mnf}", "warn", log_fn)
@@ -301,7 +296,7 @@ def run_processing(params: dict, log_fn=None) -> dict:
     merged = apply_brand_routing(merged, brand_judge_df, brand_auth_df, log_fn)
 
     # Dedup: one row per shipping_traceno.
-    # Sort HKP-F rows first within each traceno — so if ANY ordersn in a traceno
+    # Sort HKP-F rows first within each traceno — so if ANY item in the order
     # triggers HKP-F, the kept row reflects that result.
     before = len(merged)
     si_col = merged.get("sorting_instruction", pd.Series("", index=merged.index))
