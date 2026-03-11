@@ -268,9 +268,20 @@ def run_processing(params: dict, log_fn=None) -> dict:
     all_info.columns = all_info.columns.str.strip()
     manifest.columns = manifest.columns.str.strip()
 
-    cn_count = (all_info.get("sorting_instruction", pd.Series(dtype=str))
-                .str.strip().str.upper() == "CN").sum()
-    _log(f"    All Info — Rows: {len(all_info):,}  |  sorting=CN: {cn_count:,}  |  Other: {len(all_info)-cn_count:,}", "ok", log_fn)
+    # Keep only the output columns from All Info — discard everything else immediately
+    ai_keep    = [c for c in OUTPUT_COLS if c in all_info.columns]
+    ai_missing = [c for c in OUTPUT_COLS if c not in all_info.columns]
+    if ai_missing:
+        _log(f"    Missing columns in All Info: {ai_missing}", "warn", log_fn)
+    all_info = all_info[ai_keep]
+
+    # Split immediately: non-CN rows are set aside and never touched again
+    is_cn  = all_info["sorting_instruction"].str.strip().str.upper() == "CN"
+    non_cn  = all_info[~is_cn].copy()   # locked — goes straight to output
+    cn_only = all_info[is_cn].copy()    # will be merged, routed, deduped
+
+    cn_count = is_cn.sum()
+    _log(f"    All Info — Rows: {len(all_info):,}  |  sorting=CN: {cn_count:,}  |  Other: {len(non_cn):,}", "ok", log_fn)
     _log(f"    Manifest — Rows: {len(manifest):,}", "ok", log_fn)
 
     missing_mnf = [c for c in ["orderid", "item_name", "sub_category", "level3_category"]
@@ -285,13 +296,6 @@ def run_processing(params: dict, log_fn=None) -> dict:
         f_ba = ex.submit(fetch_sheet, params["brand_auth_url"],  "Brand Authorization", log_fn)
         brand_judge_df = f_bj.result()
         brand_auth_df  = f_ba.result()
-
-    # Split by sorting_instruction == "CN" — only these rows go through brand routing.
-    # Rows with any other value (HKD, HKP-CN, TWS02 seller, scrap-lost, …) are
-    # never touched, regardless of the country column.
-    is_cn = all_info.get("sorting_instruction", pd.Series(dtype=str)).str.strip().str.upper() == "CN"
-    non_cn = all_info[~is_cn].copy()
-    cn_only = all_info[is_cn].copy()
 
     # 4/5 — Merge CN rows with Manifest only
     _log("\n[4/5]  Merging CN rows with Manifest ...", "", log_fn)
@@ -316,24 +320,21 @@ def run_processing(params: dict, log_fn=None) -> dict:
     )
     _log(f"\nDedup CN rows: {before:,} → {len(routed_cn):,}", "ok", log_fn)
 
+    # Drop Manifest-only columns (item_name, sub_category, level3_category) from CN rows
+    # so both halves have identical columns before concat
+    routed_cn = routed_cn[ai_keep]
+
     # Recombine: non-CN rows (unchanged) + deduped CN rows
-    merged = pd.concat([non_cn, routed_cn], ignore_index=True)
-    _log(f"Final rows (non-CN + CN): {len(merged):,}", "ok", log_fn)
+    result = pd.concat([non_cn, routed_cn], ignore_index=True)
+    _log(f"Final rows (non-CN + CN): {len(result):,}", "ok", log_fn)
 
-    # Build the final output with the required columns in the right order
-    present     = [c for c in OUTPUT_COLS if c in merged.columns]
-    missing_out = [c for c in OUTPUT_COLS if c not in merged.columns]
-    if missing_out:
-        _log(f"    Columns not found in All Info: {missing_out}", "warn", log_fn)
-
-    result = merged[present].copy()
     result["return_lm_tracking_number"] = ""   # always blank per spec
     result["special remark"]            = ""   # always blank per spec
     result.insert(0, "Batch no", batch_no)     # Column A
 
     result.to_excel(out_path, index=False, sheet_name="Sheet1")
 
-    hkp_f = int((result.get("sorting_instruction", pd.Series(dtype=str)) == "HKP-F").sum())
+    hkp_f = int((result["sorting_instruction"] == "HKP-F").sum())
     _log("\n" + "=" * 65, "dim", log_fn)
     _log(f"DONE  |  Rows: {len(result):,}  |  HKP-F: {hkp_f:,}", "ok", log_fn)
     _log(f"Saved → {out_fname}", "ok", log_fn)
