@@ -76,6 +76,7 @@ class SLSSortingApp:
         self.sv_manifest        = tk.StringVar()
         self.sv_brand_judge_url = tk.StringVar(value=config.BRAND_JUDGE_URL)
         self.sv_brand_auth_url  = tk.StringVar(value=config.BRAND_AUTH_URL)
+        self.sv_sa_key          = tk.StringVar(value=config.SERVICE_ACCOUNT_KEY)
         self.sv_output_dir      = tk.StringVar()
 
         self._build_ui()
@@ -207,6 +208,23 @@ class SLSSortingApp:
             text='Column: "child_shopid"  |  If URL fails, click "Browse file..." to use a local Excel instead',
             font=self.fnt_hint).grid(row=5, column=0, sticky="w")
 
+        ttk.Separator(f3, orient="horizontal").grid(row=6, column=0, sticky="ew", pady=8)
+
+        ttk.Label(f3, text="Google Service Account Key  (optional — needed for private sheets):") \
+            .grid(row=7, column=0, sticky="w", pady=(0, 2))
+        sa_row = ttk.Frame(f3)
+        sa_row.grid(row=8, column=0, sticky="ew", pady=(0, 2))
+        ttk.Entry(sa_row, textvariable=self.sv_sa_key) \
+            .pack(side="left", fill="x", expand=True)
+        ttk.Button(sa_row, text="Browse file...",
+                   command=lambda: self._browse_file(
+                       self.sv_sa_key,
+                       [("JSON files", "*.json"), ("All files", "*.*")]
+                   )).pack(side="left", padx=(8, 0))
+        ttk.Label(f3,
+            text='The .json key file from Google Cloud Console  |  Leave empty to use public CSV export',
+            font=self.fnt_hint).grid(row=9, column=0, sticky="w")
+
         f3.columnconfigure(0, weight=1)
 
         # Step 4 — Output folder
@@ -326,6 +344,7 @@ class SLSSortingApp:
                 "manifest_path":   self.sv_manifest.get().strip(),
                 "brand_judge_url": self.sv_brand_judge_url.get().strip(),
                 "brand_auth_url":  self.sv_brand_auth_url.get().strip(),
+                "sa_key_path":     self.sv_sa_key.get().strip(),
                 "out_dir":         self.sv_output_dir.get().strip(),
             }
             result = run_processing(params, log_fn=self._log)

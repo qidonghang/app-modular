@@ -3,17 +3,31 @@ sheets.py
 ---------
 Load brand data as a pandas DataFrame — from a Google Sheets URL or a local file.
 
-Two modes (auto-detected):
-  1. Google Sheets URL  → parse spreadsheet ID + tab ID, fetch as CSV
-  2. Local file path    → read .xlsx / .xls / .csv directly from disk
+Three modes (auto-detected):
+  1. Google Sheets URL + service account JSON  → authenticated API read (private sheets OK)
+  2. Google Sheets URL (no key file)           → public CSV export (legacy fallback)
+  3. Local file path                           → read .xlsx / .xls / .csv directly from disk
 """
 
 import os
 import re
 import pandas as pd
 
+# Lazy-initialized gspread client (created once, reused for all sheets)
+_gspread_client = None
 
-def fetch_sheet(url_or_path: str, name: str, log_fn=None) -> pd.DataFrame:
+
+def _get_gspread_client(key_path: str):
+    """Create (or reuse) a gspread client from a service account JSON key file."""
+    global _gspread_client
+    if _gspread_client is None and key_path and os.path.isfile(key_path):
+        import gspread
+        _gspread_client = gspread.service_account(filename=key_path)
+    return _gspread_client
+
+
+def fetch_sheet(url_or_path: str, name: str, log_fn=None,
+                sa_key_path: str = "") -> pd.DataFrame:
     """
     Load a sheet as a DataFrame — from a Google Sheets URL or a local file.
 
@@ -23,6 +37,7 @@ def fetch_sheet(url_or_path: str, name: str, log_fn=None) -> pd.DataFrame:
                   OR a local file path (.xlsx / .xls / .csv) — read directly
     name        : human-readable label for log messages (e.g. "Brand Judge")
     log_fn      : optional function(msg, tag) for logging to the UI
+    sa_key_path : path to a Google service account JSON key file (optional)
 
     Returns
     -------
@@ -58,18 +73,36 @@ def fetch_sheet(url_or_path: str, name: str, log_fn=None) -> pd.DataFrame:
         m_id = re.search(r"/d/([a-zA-Z0-9_-]+)", value)
         if not m_id:
             raise ValueError("Not a valid Google Sheets URL and not a local file path.")
-        sid = m_id.group(1)
 
-        m_gid = re.search(r"[#&?]gid=([0-9]+)", value)
-        gid = m_gid.group(1) if m_gid else "0"
+        # Try authenticated path first (service account)
+        gc = _get_gspread_client(sa_key_path)
 
-        csv_url = (
-            f"https://docs.google.com/spreadsheets/d/{sid}"
-            f"/export?format=csv&gid={gid}"
-        )
+        if gc:
+            log(f"    Fetching {name} via Service Account ...")
+            sh = gc.open_by_url(value)
 
-        log(f"    Fetching {name} from Google Sheets ...")
-        df = pd.read_csv(csv_url, dtype=str)
+            # Find the right tab by gid (from the URL)
+            m_gid = re.search(r"[#&?]gid=([0-9]+)", value)
+            target_gid = int(m_gid.group(1)) if m_gid else 0
+            ws = next(
+                (w for w in sh.worksheets() if w.id == target_gid),
+                sh.sheet1,
+            )
+
+            records = ws.get_all_records()
+            df = pd.DataFrame(records).astype(str)
+        else:
+            # Legacy path: public CSV export (no auth)
+            sid = m_id.group(1)
+            m_gid = re.search(r"[#&?]gid=([0-9]+)", value)
+            gid = m_gid.group(1) if m_gid else "0"
+            csv_url = (
+                f"https://docs.google.com/spreadsheets/d/{sid}"
+                f"/export?format=csv&gid={gid}"
+            )
+            log(f"    Fetching {name} from Google Sheets (public CSV, no key) ...")
+            df = pd.read_csv(csv_url, dtype=str)
+
         df.columns = df.columns.str.strip()
         log(f"    {name}: {len(df):,} rows  |  columns: {df.columns.tolist()}", "ok")
         return df

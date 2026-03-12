@@ -33,7 +33,7 @@ jobs:
       # Step 3: Install the required packages
       - name: Install dependencies
         run: |
-          pip install pandas openpyxl pyinstaller
+          pip install pandas openpyxl gspread pyinstaller
 
       # Step 4: Build the EXE using PyInstaller
       - name: Build EXE with PyInstaller

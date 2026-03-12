@@ -22,3 +22,6 @@ env/
 # Temporary / output files
 *.xlsx
 !*Template*.xlsx
+
+# Service account key files (secrets — never commit)
+*.json
