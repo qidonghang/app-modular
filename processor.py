@@ -174,49 +174,53 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
 
     if df.empty or not brand_terms:
         _log("    No brand terms — all CN rows kept as-is", "", log_fn)
-        return df.copy()
+        df = df.copy()
+        df["brand_name"] = ""
+        return df
 
     df = df.copy()
+    df["brand_name"] = ""
 
-    # Text columns used for matching
-    si = df.get("item_name",       pd.Series("", index=df.index)).fillna("").astype(str)
-    ss = df.get("sub_category",    pd.Series("", index=df.index)).fillna("").astype(str)
-    sl = df.get("level3_category", pd.Series("", index=df.index)).fillna("").astype(str)
+    # Pre-lowercase brand/exclusion lists for fast comparison
+    brands_lower = [(b, b.lower()) for b in brand_terms if b]
+    ie_lower = [t.lower() for t in item_excl]
+    ce_lower = [t.lower() for t in cat_excl]
 
-    sid_norm = df.get("shopid", pd.Series("", index=df.index)).apply(_norm_id)
+    hkp_count = 0
 
-    # Build regex patterns once (faster than per-row string searching)
-    ie_pat = ("|".join(re.escape(t) for t in item_excl)) if item_excl else None
-    ce_pat = ("|".join(re.escape(t) for t in cat_excl))  if cat_excl  else None
+    # Row-by-row: sequential checks — brand → item exclude → category exclude → auth
+    for idx, row in df.iterrows():
+        item    = str(row.get("item_name", "") or "").lower()
+        sub_cat = str(row.get("sub_category", "") or "").lower()
+        l3_cat  = str(row.get("level3_category", "") or "").lower()
+        shop    = _norm_id(row.get("shopid", ""))
 
-    # hkp_mask: True for rows that will become HKP-F
-    hkp_mask = pd.Series(False, index=df.index)
+        # Step 1: Does item_name contain any brand keyword?
+        matched_brands = [b_orig for b_orig, b_low in brands_lower if b_low in item]
+        if not matched_brands:
+            continue   # no brand match → keep CN, move to next row
 
-    # Check each brand independently (a row is HKP-F if ANY brand triggers it)
-    for brand in brand_terms:
-        if not brand:
-            continue
+        df.at[idx, "brand_name"] = ", ".join(matched_brands)
 
-        # Does item_name contain this brand?
-        hit = si.str.contains(re.escape(brand), case=False, na=False)
-        if not hit.any():
-            continue
+        # Step 2: Does item_name contain any item-name exclude keyword?
+        if any(kw in item for kw in ie_lower):
+            continue   # excluded by item name → keep CN
 
-        # Is this hit cancelled by an exclusion rule?
-        excl = pd.Series(False, index=df.index)
-        if ie_pat:
-            excl |= hit & si.str.contains(ie_pat, case=False, na=False)
-        if ce_pat:
-            excl |= hit & ss.str.contains(ce_pat, case=False, na=False)  # sub_category
-            excl |= hit & sl.str.contains(ce_pat, case=False, na=False)  # level3_category
+        # Step 3: Does sub_category or level3_category contain a category exclude?
+        if any(kw in sub_cat or kw in l3_cat for kw in ce_lower):
+            continue   # excluded by category → keep CN
 
-        # Hit + not excluded + not an authorized shop → HKP-F
-        hkp_mask |= hit & (~excl) & (~sid_norm.isin(auth_ids))
+        # Step 4: Is shopid in the Brand Authorization list?
+        if shop in auth_ids:
+            continue   # authorized shop → keep CN
 
-    df.loc[hkp_mask, "sorting_instruction"] = "HKP-F"
+        # All checks passed → HKP-F
+        df.at[idx, "sorting_instruction"] = "HKP-F"
+        hkp_count += 1
 
-    _log(f"    CN rows kept as-is : {(~hkp_mask).sum():,}", "ok", log_fn)
-    _log(f"    CN rows → HKP-F   : {int(hkp_mask.sum()):,}", "ok", log_fn)
+    cn_count = len(df) - hkp_count
+    _log(f"    CN rows kept as-is : {cn_count:,}", "ok", log_fn)
+    _log(f"    CN rows → HKP-F   : {hkp_count:,}", "ok", log_fn)
 
     return df
 
@@ -319,12 +323,21 @@ def run_processing(params: dict, log_fn=None) -> dict:
     _log(f"\nDedup CN rows: {before:,} → {len(routed_cn):,}", "ok", log_fn)
 
     # Drop Manifest-only columns (item_name, sub_category, level3_category) from CN rows
-    # so both halves have identical columns before concat
-    routed_cn = routed_cn[ai_keep]
+    # Keep brand_name (added by brand routing) alongside the standard output columns
+    routed_cn = routed_cn[ai_keep + ["brand_name"]]
+
+    # Non-CN rows have no brand check — add empty brand_name column
+    non_cn["brand_name"] = ""
 
     # Recombine: non-CN rows (unchanged) + deduped CN rows
     result = pd.concat([non_cn, routed_cn], ignore_index=True)
     _log(f"Final rows (non-CN + CN): {len(result):,}", "ok", log_fn)
+
+    # Reorder: move brand_name right after sorting_instruction
+    cols = [c for c in result.columns if c != "brand_name"]
+    si_idx = cols.index("sorting_instruction") + 1
+    cols.insert(si_idx, "brand_name")
+    result = result[cols]
 
     result["return_lm_tracking_number"] = ""   # always blank per spec
     result["special remark"]            = ""   # always blank per spec
