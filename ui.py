@@ -142,8 +142,19 @@ class SLSSortingApp:
         canvas.configure(yscrollcommand=vscr.set)
         canvas.pack(side="left",  fill="both", expand=True)
         vscr.pack(side="right", fill="y")
-        canvas.bind_all("<MouseWheel>",
-            lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        # Mouse wheel scrolling — works on both macOS and Windows
+        def _on_scroll(event):
+            if event.delta:
+                # macOS: delta is ±1..±10; Windows: delta is ±120
+                amount = -event.delta if abs(event.delta) < 20 else int(-event.delta / 120)
+                canvas.yview_scroll(amount, "units")
+            elif event.num == 4:
+                canvas.yview_scroll(-3, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(3, "units")
+        canvas.bind_all("<MouseWheel>", _on_scroll)
+        canvas.bind_all("<Button-4>", _on_scroll)   # Linux scroll up
+        canvas.bind_all("<Button-5>", _on_scroll)   # Linux scroll down
 
         PAD = {"padx": 18, "pady": 8}
 
