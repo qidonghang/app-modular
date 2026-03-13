@@ -94,6 +94,7 @@ def fetch_sheet(url_or_path: str, name: str, log_fn=None,
 
             records = ws.get_all_records()
             df = pd.DataFrame(records).astype(str)
+            df = df.replace("", pd.NA)   # gspread returns "" for empty cells; align with CSV (NaN)
         else:
             # Legacy path: public CSV export (no auth)
             sid = m_id.group(1)

@@ -145,7 +145,7 @@ def apply_brand_routing(df: pd.DataFrame, bj_df, ba_df, log_fn=None) -> pd.DataF
             _log(f"    Brands ({len(brand_terms)}): {preview}{suffix}", "info", log_fn)
 
         if c_iexcl:
-            item_excl = bj[c_iexcl].dropna().str.strip().tolist()
+            item_excl = [t for t in bj[c_iexcl].dropna().str.strip().tolist() if t]
             preview = item_excl[:4]
             suffix = "..." if len(item_excl) > 4 else ""
             _log(f"    Item name excludes ({len(item_excl)}): {preview}{suffix}", "", log_fn)

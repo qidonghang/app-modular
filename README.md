@@ -168,6 +168,34 @@ One bad item = the whole parcel flagged.
 
 ---
 
+## How to Change the Google Service Account
+
+The app uses a Google service account to read private Google Sheets. The credentials are embedded directly in `config.py` so the EXE works standalone (no external JSON file needed).
+
+If you need to switch to a different service account in the future:
+
+### Step 1 — Create a new service account
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (or use an existing one)
+3. Enable the **Google Sheets API** (APIs & Services → Library → search "Google Sheets API" → Enable)
+4. Go to **IAM & Admin → Service Accounts** → Create Service Account
+5. Give it a name → click Create → Done
+6. Click the new account → Keys tab → Add Key → Create new key → JSON → Download
+
+### Step 2 — Share your Google Sheet with the new account
+1. Open the downloaded JSON file and copy the `client_email` value (looks like `name@project.iam.gserviceaccount.com`)
+2. Open your Google Sheet → click Share → paste that email → set to **Viewer** → Send
+
+### Step 3 — Update `config.py`
+1. Open the JSON key file you downloaded
+2. Open `config.py` and replace the entire `SERVICE_ACCOUNT_KEY = { ... }` dict with the contents of your new JSON file
+3. Make sure it's valid Python — the JSON format works directly as a Python dict
+
+### Step 4 — Rebuild the EXE
+Push the changes to GitHub. The GitHub Actions workflow will automatically build a new `SortFlow.exe` with the updated credentials.
+
+---
+
 ## Troubleshooting
 
 | Problem | Likely cause | Fix |
