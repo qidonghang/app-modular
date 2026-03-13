@@ -288,7 +288,7 @@ def run_processing(params: dict, log_fn=None) -> dict:
 
     # 3/5 — Fetch Brand sheets in parallel (both are independent)
     _log("\n[3/5]  Fetching brand data (parallel) ...", "", log_fn)
-    sa_key = params.get("sa_key_path", "")
+    sa_key = params.get("sa_key", None)
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_bj = ex.submit(fetch_sheet, params["brand_judge_url"], "Brand Judge",        log_fn, sa_key)
         f_ba = ex.submit(fetch_sheet, params["brand_auth_url"],  "Brand Authorization", log_fn, sa_key)

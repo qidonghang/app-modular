@@ -17,17 +17,20 @@ import pandas as pd
 _gspread_client = None
 
 
-def _get_gspread_client(key_path: str):
-    """Create (or reuse) a gspread client from a service account JSON key file."""
+def _get_gspread_client(key_data):
+    """Create (or reuse) a gspread client from embedded dict or JSON file path."""
     global _gspread_client
-    if _gspread_client is None and key_path and os.path.isfile(key_path):
+    if _gspread_client is None and key_data:
         import gspread
-        _gspread_client = gspread.service_account(filename=key_path)
+        if isinstance(key_data, dict):
+            _gspread_client = gspread.service_account_from_dict(key_data)
+        elif isinstance(key_data, str) and os.path.isfile(key_data):
+            _gspread_client = gspread.service_account(filename=key_data)
     return _gspread_client
 
 
 def fetch_sheet(url_or_path: str, name: str, log_fn=None,
-                sa_key_path: str = "") -> pd.DataFrame:
+                sa_key_data=None) -> pd.DataFrame:
     """
     Load a sheet as a DataFrame — from a Google Sheets URL or a local file.
 
@@ -37,7 +40,7 @@ def fetch_sheet(url_or_path: str, name: str, log_fn=None,
                   OR a local file path (.xlsx / .xls / .csv) — read directly
     name        : human-readable label for log messages (e.g. "Brand Judge")
     log_fn      : optional function(msg, tag) for logging to the UI
-    sa_key_path : path to a Google service account JSON key file (optional)
+    sa_key_data : service account credentials — dict (embedded) or file path string
 
     Returns
     -------
@@ -75,7 +78,7 @@ def fetch_sheet(url_or_path: str, name: str, log_fn=None,
             raise ValueError("Not a valid Google Sheets URL and not a local file path.")
 
         # Try authenticated path first (service account)
-        gc = _get_gspread_client(sa_key_path)
+        gc = _get_gspread_client(sa_key_data)
 
         if gc:
             log(f"    Fetching {name} via Service Account ...")
